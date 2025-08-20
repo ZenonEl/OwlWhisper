@@ -9,41 +9,47 @@ import (
 	"syscall"
 
 	"OwlWhisper/internal/core"
-	"OwlWhisper/internal/tui"
+	"OwlWhisper/internal/tui/controller"
+	"OwlWhisper/pkg/config"
+	"OwlWhisper/pkg/interfaces"
 )
 
 // App представляет собой основное приложение
 type App struct {
-	node      *core.Node
-	discovery *core.DiscoveryManager
-	tui       *tui.Handler
-	ctx       context.Context
-	cancel    context.CancelFunc
+	coreService   interfaces.CoreService
+	tuiController *controller.Controller
+	config        *interfaces.Config
+
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // NewApp создает новое приложение
 func NewApp() (*App, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Создаем узел
-	node, err := core.NewNode(ctx)
+	// Загружаем конфигурацию
+	cfg := config.DefaultConfig()
+
+	// Создаем CORE сервис
+	coreService, err := core.NewService(cfg)
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("не удалось создать узел: %w", err)
+		return nil, fmt.Errorf("не удалось создать CORE сервис: %w", err)
 	}
 
-	// Создаем менеджер обнаружения
-	discovery := core.NewDiscoveryManager(ctx, node.GetHost())
-
-	// Создаем TUI обработчик
-	tuiHandler := tui.NewHandler(node)
+	// Создаем TUI контроллер (если включен)
+	var tuiController *controller.Controller
+	if cfg.UI.EnableTUI {
+		tuiController = controller.NewController(coreService)
+	}
 
 	app := &App{
-		node:      node,
-		discovery: discovery,
-		tui:       tuiHandler,
-		ctx:       ctx,
-		cancel:    cancel,
+		coreService:   coreService,
+		tuiController: tuiController,
+		config:        cfg,
+		ctx:           ctx,
+		cancel:        cancel,
 	}
 
 	return app, nil
@@ -51,27 +57,24 @@ func NewApp() (*App, error) {
 
 // Run запускает приложение
 func (app *App) Run() error {
-	// Запускаем узел
-	if err := app.node.Start(); err != nil {
-		return fmt.Errorf("не удалось запустить узел: %w", err)
-	}
-
-	// Запускаем discovery
-	if err := app.discovery.Start(); err != nil {
-		return fmt.Errorf("не удалось запустить discovery: %w", err)
+	// Запускаем CORE сервис
+	if err := app.coreService.Start(app.ctx); err != nil {
+		return fmt.Errorf("не удалось запустить CORE сервис: %w", err)
 	}
 
 	// Обрабатываем сигналы для graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// Запускаем TUI в отдельной горутине
-	go func() {
-		if err := app.tui.Start(); err != nil {
-			log.Printf("Ошибка TUI: %v", err)
-			app.cancel()
-		}
-	}()
+	// Запускаем TUI в отдельной горутине (если включен)
+	if app.tuiController != nil {
+		go func() {
+			if err := app.tuiController.Start(); err != nil {
+				log.Printf("Ошибка TUI: %v", err)
+				app.cancel()
+			}
+		}()
+	}
 
 	// Ждем сигнала завершения
 	<-sigChan
@@ -83,14 +86,14 @@ func (app *App) Run() error {
 
 // Shutdown корректно останавливает приложение
 func (app *App) Shutdown() error {
-	// Останавливаем discovery
-	if err := app.discovery.Stop(); err != nil {
-		log.Printf("⚠️ Ошибка остановки discovery: %v", err)
+	// Останавливаем TUI
+	if app.tuiController != nil {
+		app.tuiController.Stop()
 	}
 
-	// Останавливаем узел
-	if err := app.node.Close(); err != nil {
-		log.Printf("⚠️ Ошибка остановки узла: %v", err)
+	// Останавливаем CORE сервис
+	if err := app.coreService.Stop(app.ctx); err != nil {
+		log.Printf("⚠️ Ошибка остановки CORE сервиса: %v", err)
 	}
 
 	// Отменяем контекст
