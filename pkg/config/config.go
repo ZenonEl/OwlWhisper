@@ -12,6 +12,8 @@ type Config struct {
 	Network struct {
 		ListenPort      int      `json:"listen_port"`
 		BootstrapNodes  []string `json:"bootstrap_nodes"`
+		RelayNodes      []string `json:"relay_nodes"`
+		STUNServers     []string `json:"stun_servers"`
 		EnableRelay     bool     `json:"enable_relay"`
 		EnableNAT       bool     `json:"enable_nat"`
 		EnableHolePunch bool     `json:"enable_hole_punch"`
@@ -56,6 +58,15 @@ func DefaultConfig() *Config {
 		"/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
 		"/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
 		"/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
+	}
+	config.Network.RelayNodes = []string{
+		"/dnsaddr/relay.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
+		"/dnsaddr/relay.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
+	}
+	config.Network.STUNServers = []string{
+		"stun:stun.l.google.com:19302",
+		"stun:stun1.l.google.com:19302",
+		"stun:stun2.l.google.com:19302",
 	}
 	config.Network.EnableRelay = true
 	config.Network.EnableNAT = true
