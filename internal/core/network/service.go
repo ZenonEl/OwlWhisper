@@ -188,7 +188,7 @@ func (s *Service) handlePeerFound(pi peer.AddrInfo) {
 	// Добавляем в список пиров
 	s.peersMutex.Lock()
 	s.peers[pi.ID] = &interfaces.PeerInfo{
-		ID:      pi.ID,
+		ID:      pi.ID.String(),
 		Address: pi.Addrs[0].String(),
 		Latency: 0, // TODO: измерить латентность
 	}
