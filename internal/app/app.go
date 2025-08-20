@@ -14,36 +14,31 @@ import (
 
 // App представляет собой основное приложение
 type App struct {
-	node      *core.Node
-	discovery *core.DiscoveryManager
-	tui       *tui.Handler
-	ctx       context.Context
-	cancel    context.CancelFunc
+	coreController *core.CoreController
+	tui            *tui.Handler
+	ctx            context.Context
+	cancel         context.CancelFunc
 }
 
 // NewApp создает новое приложение
 func NewApp() (*App, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Создаем узел
-	node, err := core.NewNode(ctx)
+	// Создаем Core контроллер
+	coreController, err := core.NewCoreController(ctx)
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("не удалось создать узел: %w", err)
+		return nil, fmt.Errorf("не удалось создать Core контроллер: %w", err)
 	}
 
-	// Создаем менеджер обнаружения
-	discovery := core.NewDiscoveryManager(ctx, node.GetHost())
-
 	// Создаем TUI обработчик
-	tuiHandler := tui.NewHandler(node)
+	tuiHandler := tui.NewHandler(coreController)
 
 	app := &App{
-		node:      node,
-		discovery: discovery,
-		tui:       tuiHandler,
-		ctx:       ctx,
-		cancel:    cancel,
+		coreController: coreController,
+		tui:            tuiHandler,
+		ctx:            ctx,
+		cancel:         cancel,
 	}
 
 	return app, nil
@@ -51,14 +46,9 @@ func NewApp() (*App, error) {
 
 // Run запускает приложение
 func (app *App) Run() error {
-	// Запускаем узел
-	if err := app.node.Start(); err != nil {
-		return fmt.Errorf("не удалось запустить узел: %w", err)
-	}
-
-	// Запускаем discovery
-	if err := app.discovery.Start(); err != nil {
-		return fmt.Errorf("не удалось запустить discovery: %w", err)
+	// Запускаем Core контроллер
+	if err := app.coreController.Start(); err != nil {
+		return fmt.Errorf("не удалось запустить Core контроллер: %w", err)
 	}
 
 	// Обрабатываем сигналы для graceful shutdown
@@ -83,14 +73,9 @@ func (app *App) Run() error {
 
 // Shutdown корректно останавливает приложение
 func (app *App) Shutdown() error {
-	// Останавливаем discovery
-	if err := app.discovery.Stop(); err != nil {
-		log.Printf("⚠️ Ошибка остановки discovery: %v", err)
-	}
-
-	// Останавливаем узел
-	if err := app.node.Close(); err != nil {
-		log.Printf("⚠️ Ошибка остановки узла: %v", err)
+	// Останавливаем Core контроллер
+	if err := app.coreController.Stop(); err != nil {
+		log.Printf("⚠️ Ошибка остановки Core контроллера: %v", err)
 	}
 
 	// Отменяем контекст

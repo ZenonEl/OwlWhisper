@@ -1,10 +1,10 @@
 package core
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"log"
+	"sync"
 
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/host"
@@ -16,51 +16,42 @@ import (
 // PROTOCOL_ID - уникальный идентификатор нашего чат-протокола
 const PROTOCOL_ID = "/owl-whisper/1.0.0"
 
-// NetworkEventLogger логирует события сети для мониторинга
+// NetworkEventLogger логирует сетевые события
 type NetworkEventLogger struct{}
 
-// Listen вызывается при запуске сети
-func (nel *NetworkEventLogger) Listen(network.Network, multiaddr.Multiaddr) {}
-
-// ListenClose вызывается при остановке прослушивания
+func (nel *NetworkEventLogger) Listen(network.Network, multiaddr.Multiaddr)      {}
 func (nel *NetworkEventLogger) ListenClose(network.Network, multiaddr.Multiaddr) {}
 
-// Connected вызывается при успешном соединении
 func (nel *NetworkEventLogger) Connected(net network.Network, conn network.Conn) {
 	log.Printf("🔗 EVENT: Успешное соединение с %s", conn.RemotePeer().ShortString())
 }
 
-// Disconnected вызывается при разрыве соединения
 func (nel *NetworkEventLogger) Disconnected(net network.Network, conn network.Conn) {
 	log.Printf("🔌 EVENT: Соединение с %s разорвано", conn.RemotePeer().ShortString())
 }
 
-// OpenedStream вызывается при открытии потока
-func (nel *NetworkEventLogger) OpenedStream(net network.Network, stream network.Stream) {}
-
-// ClosedStream вызывается при закрытии потока
-func (nel *NetworkEventLogger) ClosedStream(net network.Network, stream network.Stream) {}
+func (nel *NetworkEventLogger) OpenedStream(network.Network, network.Stream) {}
+func (nel *NetworkEventLogger) ClosedStream(network.Network, network.Stream) {}
 
 // Node представляет собой libp2p узел
 type Node struct {
 	host host.Host
 	ctx  context.Context
+
+	// Канал для входящих сообщений
+	messagesChan chan RawMessage
+
+	// Мьютекс для безопасного доступа к пирам
+	peersMutex sync.RWMutex
+	peers      map[peer.ID]bool
 }
 
 // NewNode создает новый libp2p узел
 func NewNode(ctx context.Context) (*Node, error) {
-	// Создаем новый узел libp2p с опциями для глобальной сети
+	// Создаем libp2p узел с опциями для глобальной сети
 	opts := []libp2p.Option{
-		// Включаем встроенный сервис для автоматического определения
-		// внешнего IP и работы с NAT (использует STUN)
 		libp2p.EnableNATService(),
-
-		// Включаем "пробивание дыр" в NAT. Это и есть hole punching
 		libp2p.EnableHolePunching(),
-
-		// Включаем поддержку Relay V2. Это наш fallback.
-		// Опция listen говорит, что наш узел может сам выступать
-		// ретранслятором для других (помогает сети)
 		libp2p.EnableRelay(),
 	}
 
@@ -70,14 +61,16 @@ func NewNode(ctx context.Context) (*Node, error) {
 	}
 
 	node := &Node{
-		host: h,
-		ctx:  ctx,
+		host:         h,
+		ctx:          ctx,
+		messagesChan: make(chan RawMessage, 100), // Буферизованный канал
+		peers:        make(map[peer.ID]bool),
 	}
 
-	// Устанавливаем обработчик для нашего протокола
+	// Устанавливаем обработчик потоков
 	h.SetStreamHandler(PROTOCOL_ID, node.handleStream)
 
-	// Устанавливаем Network Notifiee для мониторинга событий сети
+	// Устанавливаем Network Notifiee для мониторинга
 	h.Network().Notify(&NetworkEventLogger{})
 
 	log.Printf("✅ Узел создан. Ваш PeerID: %s", h.ID().String())
@@ -95,71 +88,135 @@ func (n *Node) Start() error {
 	return nil
 }
 
-// Close останавливает узел
-func (n *Node) Close() error {
-	return n.host.Close()
+// Stop останавливает узел
+func (n *Node) Stop() error {
+	if err := n.host.Close(); err != nil {
+		return fmt.Errorf("ошибка остановки узла: %w", err)
+	}
+	close(n.messagesChan)
+	log.Println("🛑 Узел остановлен")
+	return nil
 }
 
-// GetHost возвращает libp2p host
+// GetHost возвращает host.Host для внутреннего использования
 func (n *Node) GetHost() host.Host {
 	return n.host
 }
 
-// GetPeers возвращает список подключенных пиров
-func (n *Node) GetPeers() []peer.ID {
-	return n.host.Network().Peers()
+// GetMyID возвращает ID текущего узла
+func (n *Node) GetMyID() string {
+	return n.host.ID().String()
 }
 
-// SendMessage отправляет сообщение конкретному пиру
-func (n *Node) SendMessage(peerID peer.ID, message string) error {
-	// Открываем новый поток для каждого сообщения
+// GetPeers возвращает список подключенных пиров
+func (n *Node) GetPeers() []peer.ID {
+	n.peersMutex.RLock()
+	defer n.peersMutex.RUnlock()
+
+	peers := make([]peer.ID, 0, len(n.peers))
+	for peerID := range n.peers {
+		peers = append(peers, peerID)
+	}
+	return peers
+}
+
+// IsConnected проверяет, подключен ли пир
+func (n *Node) IsConnected(peerID peer.ID) bool {
+	n.peersMutex.RLock()
+	defer n.peersMutex.RUnlock()
+
+	return n.peers[peerID]
+}
+
+// AddPeer добавляет пира в список
+func (n *Node) AddPeer(peerID peer.ID) {
+	n.peersMutex.Lock()
+	defer n.peersMutex.Unlock()
+
+	n.peers[peerID] = true
+}
+
+// RemovePeer удаляет пира из списка
+func (n *Node) RemovePeer(peerID peer.ID) {
+	n.peersMutex.Lock()
+	defer n.peersMutex.Unlock()
+
+	delete(n.peers, peerID)
+}
+
+// Send отправляет данные конкретному пиру
+func (n *Node) Send(peerID peer.ID, data []byte) error {
+	// Открываем поток к пиру
 	stream, err := n.host.NewStream(n.ctx, peerID, PROTOCOL_ID)
 	if err != nil {
 		return fmt.Errorf("не удалось открыть поток к %s: %w", peerID.ShortString(), err)
 	}
 	defer stream.Close()
 
-	// Отправляем сообщение
-	_, err = stream.Write([]byte(message + "\n"))
+	// Отправляем данные
+	_, err = stream.Write(data)
 	if err != nil {
-		return fmt.Errorf("не удалось отправить сообщение к %s: %w", peerID.ShortString(), err)
+		return fmt.Errorf("не удалось отправить данные к %s: %w", peerID.ShortString(), err)
 	}
 
-	log.Printf("📤 Вам -> %s: %s", peerID.ShortString(), message)
+	log.Printf("📤 Отправлено %d байт к %s", len(data), peerID.ShortString())
 	return nil
 }
 
-// BroadcastMessage отправляет сообщение всем подключенным пирам
-func (n *Node) BroadcastMessage(message string) {
+// Broadcast отправляет данные всем подключенным пирам
+func (n *Node) Broadcast(data []byte) error {
 	peers := n.GetPeers()
 	if len(peers) == 0 {
-		log.Println("Нет подключенных участников для отправки сообщения.")
-		return
+		log.Println("⚠️ Нет подключенных пиров для broadcast")
+		return nil
 	}
 
-	for _, p := range peers {
-		if err := n.SendMessage(p, message); err != nil {
-			log.Printf("⚠️ Не удалось отправить сообщение к %s: %v", p.ShortString(), err)
+	var lastError error
+	for _, peerID := range peers {
+		if err := n.Send(peerID, data); err != nil {
+			log.Printf("❌ Ошибка отправки к %s: %v", peerID.ShortString(), err)
+			lastError = err
 		}
 	}
+
+	return lastError
+}
+
+// Messages возвращает канал для получения входящих сообщений
+func (n *Node) Messages() <-chan RawMessage {
+	return n.messagesChan
 }
 
 // handleStream обрабатывает входящие потоки
 func (n *Node) handleStream(stream network.Stream) {
 	remotePeer := stream.Conn().RemotePeer()
-	log.Printf("ℹ️ Получен новый поток от %s", remotePeer.String())
+	log.Printf("📥 Получен поток от %s", remotePeer.ShortString())
 
-	// Создаем 'reader' для чтения данных из потока
-	reader := bufio.NewReader(stream)
-	for {
-		// Читаем сообщение до символа новой строки
-		str, err := reader.ReadString('\n')
-		if err != nil {
-			// Ошибка EOF означает, что собеседник закрыл поток. Это нормально.
-			stream.Close()
-			return
-		}
-		// Выводим полученное сообщение
-		fmt.Printf("📥 От %s: %s", remotePeer.ShortString(), str)
+	// Добавляем пира в список
+	n.AddPeer(remotePeer)
+
+	// Читаем данные из потока
+	buffer := make([]byte, 1024)
+	bytesRead, err := stream.Read(buffer)
+	if err != nil {
+		log.Printf("❌ Ошибка чтения потока от %s: %v", remotePeer.ShortString(), err)
+		stream.Close()
+		return
 	}
+
+	// Создаем RawMessage
+	message := RawMessage{
+		SenderID: remotePeer,
+		Data:     buffer[:bytesRead],
+	}
+
+	// Отправляем в канал сообщений
+	select {
+	case n.messagesChan <- message:
+		log.Printf("📨 Сообщение от %s добавлено в очередь", remotePeer.ShortString())
+	default:
+		log.Printf("⚠️ Канал сообщений переполнен, сообщение от %s потеряно", remotePeer.ShortString())
+	}
+
+	stream.Close()
 }

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"sync" // ИЗМЕНЕНИЕ: Добавляем пакет sync
+	"sync"
 	"time"
 
 	dht "github.com/libp2p/go-libp2p-kad-dht"
@@ -14,96 +14,144 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
 )
 
-// DISCOVERY_TAG_MDNS - "секретное слово" для поиска участников через mDNS
-const DISCOVERY_TAG_MDNS = "owl-whisper-mdns"
+const (
+	DISCOVERY_TAG     = "owl-whisper-mdns"
+	GLOBAL_RENDEZVOUS = "owl-whisper-global"
+)
 
-// DISCOVERY_TAG_DHT - "секретное слово" для поиска участников через DHT
-const DISCOVERY_TAG_DHT = "owl-whisper-global-rendezvous"
-
-// DiscoveryNotifee обрабатывает события обнаружения новых участников сети
+// DiscoveryNotifee обрабатывает события обнаружения
 type DiscoveryNotifee struct {
-	node host.Host
-	ctx  context.Context
+	node   host.Host
+	ctx    context.Context
+	onPeer func(peer.AddrInfo)
 }
 
-// HandlePeerFound вызывается, когда mDNS находит нового участника
+// HandlePeerFound вызывается когда найден новый пир
 func (n *DiscoveryNotifee) HandlePeerFound(pi peer.AddrInfo) {
-	// Пропускаем, если нашли самого себя
+	// Пропускаем себя
 	if pi.ID == n.node.ID() {
 		return
 	}
-	log.Printf("📢 Обнаружен новый участник: %s", pi.ID.String())
 
-	// Пытаемся подключиться к найденному участнику
-	err := n.node.Connect(n.ctx, pi)
-	if err != nil {
-		log.Printf("❌ Не удалось подключиться к %s: %v", pi.ID.String(), err)
-	} else {
-		log.Printf("✅ Успешное подключение к %s", pi.ID.String())
+	log.Printf("📢 Обнаружен новый пир: %s", pi.ID.ShortString())
+
+	// Пытаемся подключиться
+	if err := n.node.Connect(n.ctx, pi); err != nil {
+		log.Printf("❌ Не удалось подключиться к %s: %v", pi.ID.ShortString(), err)
+		return
+	}
+
+	log.Printf("✅ Успешное подключение к %s", pi.ID.ShortString())
+
+	// Уведомляем о новом пире
+	if n.onPeer != nil {
+		n.onPeer(pi)
 	}
 }
 
-// DiscoveryManager управляет всеми механизмами обнаружения
+// DiscoveryManager управляет обнаружением пиров
 type DiscoveryManager struct {
-	mdnsService      mdns.Service
+	host             host.Host
 	dht              *dht.IpfsDHT
 	routingDiscovery *routing.RoutingDiscovery
+	mdnsService      mdns.Service
 	notifee          *DiscoveryNotifee
-	host             host.Host // ИЗМЕНЕНИЕ: Добавляем host для доступа
-	ctx              context.Context
+
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	// Канал для уведомлений о новых пирах
+	peersChan chan peer.AddrInfo
 }
 
 // NewDiscoveryManager создает новый менеджер обнаружения
-func NewDiscoveryManager(ctx context.Context, node host.Host) *DiscoveryManager {
+func NewDiscoveryManager(ctx context.Context, host host.Host, onPeer func(peer.AddrInfo)) (*DiscoveryManager, error) {
+	ctx, cancel := context.WithCancel(ctx)
+
 	notifee := &DiscoveryNotifee{
-		node: node,
-		ctx:  ctx,
+		node:   host,
+		ctx:    ctx,
+		onPeer: onPeer,
 	}
 
-	mdnsService := mdns.NewMdnsService(node, DISCOVERY_TAG_MDNS, notifee)
+	// Создаем mDNS сервис
+	mdnsService := mdns.NewMdnsService(host, DISCOVERY_TAG, notifee)
 
-	// ИЗМЕНЕНИЕ: Переключаем DHT в режим сервера. Это критически важно!
-	kadDHT, err := dht.New(ctx, node, dht.Mode(dht.ModeServer))
+	// Создаем DHT в режиме сервера
+	kadDHT, err := dht.New(ctx, host, dht.Mode(dht.ModeServer))
 	if err != nil {
-		log.Printf("⚠️ Не удалось создать DHT: %v", err)
-	} else {
-		log.Printf("✅ DHT создан в режиме сервера")
+		cancel()
+		return nil, fmt.Errorf("не удалось создать DHT: %w", err)
 	}
 
+	// Создаем routing discovery
 	routingDiscovery := routing.NewRoutingDiscovery(kadDHT)
-	log.Printf("✅ Routing discovery создан")
 
-	return &DiscoveryManager{
-		mdnsService:      mdnsService,
+	dm := &DiscoveryManager{
+		host:             host,
 		dht:              kadDHT,
 		routingDiscovery: routingDiscovery,
+		mdnsService:      mdnsService,
 		notifee:          notifee,
-		host:             node, // ИЗМЕНЕНИЕ: Сохраняем host
 		ctx:              ctx,
+		cancel:           cancel,
+		peersChan:        make(chan peer.AddrInfo, 100),
 	}
+
+	return dm, nil
 }
 
-// Start запускает все механизмы обнаружения
+// Start запускает discovery сервисы
 func (dm *DiscoveryManager) Start() error {
+	// Запускаем mDNS
 	if err := dm.mdnsService.Start(); err != nil {
 		return fmt.Errorf("не удалось запустить mDNS: %w", err)
 	}
-	log.Println("📡 Сервис mDNS запущен.")
+	log.Println("📡 mDNS сервис запущен")
 
+	// Подключаемся к bootstrap узлам
+	if err := dm.dht.Bootstrap(dm.ctx); err != nil {
+		log.Printf("⚠️ Не удалось подключиться к bootstrap узлам: %v", err)
+	} else {
+		log.Println("✅ Bootstrap завершен")
+	}
+
+	// Запускаем mDNS discovery в фоне
+	go dm.startMDNSDiscovery()
+
+	// Запускаем DHT discovery в фоне
 	go dm.startDHTDiscovery()
-	log.Println("🌐 DHT discovery запущен.")
 
 	return nil
+}
+
+// Stop останавливает discovery сервисы
+func (dm *DiscoveryManager) Stop() error {
+	dm.cancel()
+
+	if dm.mdnsService != nil {
+		dm.mdnsService.Close()
+	}
+
+	if dm.dht != nil {
+		return dm.dht.Close()
+	}
+
+	return nil
+}
+
+// startMDNSDiscovery запускает mDNS discovery
+func (dm *DiscoveryManager) startMDNSDiscovery() {
+	log.Println("🏠 Поиск локальных пиров через mDNS...")
+
+	// mDNS работает автоматически через DiscoveryNotifee
+	// Просто ждем завершения контекста
+	<-dm.ctx.Done()
 }
 
 // startDHTDiscovery запускает поиск через DHT
 func (dm *DiscoveryManager) startDHTDiscovery() {
 	log.Println("🌐 Подключение к bootstrap узлам...")
-	if err := dm.dht.Bootstrap(dm.ctx); err != nil {
-		log.Printf("⚠️ Не удалось подключиться к bootstrap узлам: %v", err)
-		return
-	}
-	log.Println("✅ Bootstrap DHT завершен")
 
 	// ИЗМЕНЕНИЕ: Ждем, пока мы подключимся хотя бы к одному bootstrap-пиру.
 	// Это гарантирует, что наша таблица не пуста перед анонсом.
@@ -123,7 +171,6 @@ func (dm *DiscoveryManager) startDHTDiscovery() {
 	wg.Wait()
 
 	log.Println("📢 Анонсируемся в глобальной сети...")
-	routingDiscovery := routing.NewRoutingDiscovery(dm.dht)
 	// Используем Ticker для периодического анонсирования, чтобы оставаться видимыми
 	ticker := time.NewTicker(time.Minute * 1)
 	defer ticker.Stop()
@@ -135,7 +182,7 @@ func (dm *DiscoveryManager) startDHTDiscovery() {
 				return
 			case <-ticker.C:
 				log.Println("📢 Повторно анонсируемся в сети...")
-				_, err := routingDiscovery.Advertise(dm.ctx, DISCOVERY_TAG_DHT)
+				_, err := dm.routingDiscovery.Advertise(dm.ctx, GLOBAL_RENDEZVOUS)
 				if err != nil {
 					log.Printf("⚠️ Ошибка повторного анонса: %v", err)
 				}
@@ -144,13 +191,15 @@ func (dm *DiscoveryManager) startDHTDiscovery() {
 	}()
 
 	// Первоначальный анонс
-	_, err := routingDiscovery.Advertise(dm.ctx, DISCOVERY_TAG_DHT)
+	_, err := dm.routingDiscovery.Advertise(dm.ctx, GLOBAL_RENDEZVOUS)
 	if err != nil {
 		log.Printf("⚠️ Ошибка первоначального анонса: %v", err)
+	} else {
+		log.Printf("📢 Первоначальный анонс успешен")
 	}
 
 	log.Println("🔍 Поиск участников в глобальной сети...")
-	peerChan, err := routingDiscovery.FindPeers(dm.ctx, DISCOVERY_TAG_DHT)
+	peerChan, err := dm.routingDiscovery.FindPeers(dm.ctx, GLOBAL_RENDEZVOUS)
 	if err != nil {
 		log.Printf("⚠️ Ошибка поиска в глобальной сети: %v", err)
 		return
@@ -160,19 +209,18 @@ func (dm *DiscoveryManager) startDHTDiscovery() {
 		if p.ID == dm.host.ID() {
 			continue
 		}
+
 		log.Printf("🌐 Найден участник в глобальной сети: %s", p.ID.ShortString())
 		dm.notifee.HandlePeerFound(p)
 	}
 }
 
-// Stop останавливает все механизмы обнаружения
-func (dm *DiscoveryManager) Stop() error {
-	// Останавливаем mDNS
-	if dm.mdnsService != nil {
-		dm.mdnsService.Close()
-	}
+// GetDHT возвращает DHT для внутреннего использования
+func (dm *DiscoveryManager) GetDHT() *dht.IpfsDHT {
+	return dm.dht
+}
 
-	// TODO: Здесь будет остановка DHT discovery
-
-	return nil
+// GetRoutingDiscovery возвращает routing discovery для внутреннего использования
+func (dm *DiscoveryManager) GetRoutingDiscovery() *routing.RoutingDiscovery {
+	return dm.routingDiscovery
 }
