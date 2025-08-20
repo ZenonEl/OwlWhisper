@@ -1,14 +1,13 @@
 package storage
 
 import (
-	"OwlWhisper/internal/protocol/protocol"
 	"time"
 )
 
 // IMessageRepository определяет интерфейс для работы с сообщениями
 type IMessageRepository interface {
 	// Save сохраняет сообщение в базу данных
-	Save(message *protocol.ChatMessage, senderID string) error
+	Save(message *StoredMessage) error
 
 	// GetHistory возвращает историю сообщений
 	GetHistory(limit int) ([]StoredMessage, error)

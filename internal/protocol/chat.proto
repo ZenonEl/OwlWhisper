@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package protocol;
 
-option go_package = "./protocol";
+option go_package = "OwlWhisper/internal/protocol";
 
 // ---------------------------------------------------------------- //
 // ----------------- ОСНОВНЫЕ СТРУКТУРЫ СООБЩЕНИЙ ----------------- //

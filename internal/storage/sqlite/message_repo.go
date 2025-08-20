@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"OwlWhisper/internal/protocol/protocol"
 	"OwlWhisper/internal/storage"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -58,22 +57,21 @@ func (r *MessageRepository) createTable() error {
 }
 
 // Save сохраняет сообщение в базу данных
-func (r *MessageRepository) Save(message *protocol.ChatMessage, senderID string) error {
+func (r *MessageRepository) Save(message *storage.StoredMessage) error {
 	query := `
 	INSERT INTO messages (id, text, timestamp_unix, sender_id, chat_type, recipient_id, created_at, updated_at)
 	VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
-	now := time.Now()
 	_, err := r.db.Exec(query,
-		message.MessageId,
+		message.ID,
 		message.Text,
-		message.TimestampUnix,
-		senderID,
+		message.Timestamp.Unix(),
+		message.SenderID,
 		message.ChatType,
-		message.RecipientId,
-		now,
-		now,
+		message.RecipientID,
+		message.CreatedAt,
+		message.UpdatedAt,
 	)
 
 	if err != nil {
