@@ -1,0 +1,75 @@
+{
+  "daemon": {
+    "enabled": false,
+    "port": 8080,
+    "host": "127.0.0.1",
+    "log_file": "~/.owlwhisper/owlwhisper.log"
+  },
+  "network": {
+    "discovery": {
+      "mdns": true,
+      "dht": true,
+      "bootstrap_peers": [
+        "/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
+        "/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
+        "/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb"
+      ]
+    },
+    "relay": {
+      "enabled": true,
+      "auto_relay": true
+    },
+    "hole_punching": {
+      "enabled": true
+    },
+    "nat_service": {
+      "enabled": true
+    }
+  },
+  "storage": {
+    "database": "~/.owlwhisper/owlwhisper.db",
+    "backup": {
+      "enabled": true,
+      "interval_hours": 24,
+      "keep_count": 7
+    }
+  },
+  "api": {
+    "cors": {
+      "enabled": true,
+      "allowed_origins": ["*"]
+    },
+    "rate_limit": {
+      "enabled": true,
+      "requests_per_minute": 1000
+    },
+    "websocket": {
+      "enabled": true,
+      "path": "/ws"
+    }
+  },
+  "ui": {
+    "theme": "dark",
+    "language": "ru",
+    "auto_connect": true,
+    "show_timestamps": true,
+    "message_history_limit": 1000
+  },
+  "security": {
+    "encryption": {
+      "enabled": true,
+      "algorithm": "AES-256-GCM"
+    },
+    "authentication": {
+      "enabled": false,
+      "method": "none"
+    }
+  },
+  "logging": {
+    "level": "info",
+    "format": "json",
+    "output": "file",
+    "max_size_mb": 100,
+    "max_files": 5
+  }
+} 
