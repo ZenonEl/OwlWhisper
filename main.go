@@ -1,135 +1,132 @@
 package main
 
 import (
+	"bufio"
 	"context"
-	"flag"
+	"fmt"
 	"log"
 	"os"
-	"os/signal"
-	"path/filepath"
-	"syscall"
-	"time"
+	"sync"
 
-	"OwlWhisper/internal/core"
-	"OwlWhisper/internal/storage"
-	"OwlWhisper/internal/transport"
-	"OwlWhisper/internal/ui"
-	"OwlWhisper/pkg/config"
+	"github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/p2p/discovery/mdns"
 )
 
+// PROTOCOL_ID - это уникальный идентификатор нашего чат-протокола
+const PROTOCOL_ID = "/owl-whisper/1.0.0"
+
+// DISCOVERY_TAG - это "секретное слово", по которому наши узлы будут находить друг друга в локальной сети через mDNS
+const DISCOVERY_TAG = "owl-whisper-mdns"
+
+// discoveryNotifee обрабатывает события обнаружения новых участников сети
+type discoveryNotifee struct {
+	node host.Host
+	ctx  context.Context
+}
+
+// HandlePeerFound - этот метод вызывается, когда mDNS находит нового участника
+func (n *discoveryNotifee) HandlePeerFound(pi peer.AddrInfo) {
+	// Пропускаем, если нашли самого себя
+	if pi.ID == n.node.ID() {
+		return
+	}
+	log.Printf("📢 Обнаружен новый участник: %s", pi.ID.String())
+
+	// Пытаемся подключиться к найденному участнику
+	err := n.node.Connect(n.ctx, pi)
+	if err != nil {
+		log.Printf("❌ Не удалось подключиться к %s: %v", pi.ID.String(), err)
+	} else {
+		log.Printf("✅ Успешное подключение к %s", pi.ID.String())
+	}
+}
+
+func handleStream(stream network.Stream) {
+	remotePeer := stream.Conn().RemotePeer()
+	log.Printf("ℹ️ Получен новый поток от %s", remotePeer.String())
+
+	// Создаем 'reader' для чтения данных из потока
+	reader := bufio.NewReader(stream)
+	for {
+		// Читаем сообщение до символа новой строки
+		str, err := reader.ReadString('\n')
+		if err != nil {
+			// Ошибка EOF означает, что собеседник закрыл поток. Это нормально.
+			// log.Printf("⚠️ Поток с %s закрыт: %v", remotePeer.ShortString(), err)
+			stream.Close()
+			return
+		}
+		// Выводим полученное сообщение
+		fmt.Printf("📥 От %s: %s", remotePeer.ShortString(), str)
+	}
+}
+
 func main() {
-	// Парсим флаги командной строки
-	configPath := flag.String("config", "", "Путь к файлу конфигурации")
-	listenPort := flag.Int("port", 0, "Порт для прослушивания (0 = автоматический)")
-	destAddr := flag.String("d", "", "Адрес для прямого подключения")
-	dbPath := flag.String("db", "", "Путь к базе данных SQLite")
-	flag.Parse()
-
-	// Загружаем конфигурацию
-	cfg, err := config.LoadConfig(*configPath)
-	if err != nil {
-		log.Printf("Warning: failed to load config: %v, using defaults", err)
-		cfg = config.DefaultConfig()
-	}
-
-	// Переопределяем порт если указан в командной строке
-	if *listenPort != 0 {
-		cfg.Network.ListenPort = *listenPort
-	}
-
-	// Создаем директорию для данных приложения
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		log.Fatalf("Failed to get home directory: %v", err)
-	}
-
-	appDir := filepath.Join(homeDir, ".owlwhisper")
-	if err := os.MkdirAll(appDir, 0755); err != nil {
-		log.Fatalf("Failed to create app directory: %v", err)
-	}
-
-	// Определяем путь к базе данных
-	if *dbPath == "" {
-		*dbPath = filepath.Join(appDir, "owlwhisper.db")
-	}
-
-	// Создаем репозиторий для хранения данных
-	log.Printf("📁 Используем базу данных: %s", *dbPath)
-	storageRepo, err := storage.NewSQLiteRepository(*dbPath)
-	if err != nil {
-		log.Fatalf("Failed to create storage repository: %v", err)
-	}
-	defer storageRepo.Close()
-
-	// Создаем транспортный слой
-	log.Printf("🌐 Создаем транспортный слой...")
-	transportLayer, err := transport.NewLibp2pTransport(
-		cfg.Network.ListenPort,
-		cfg.Security.EnableTLS,
-		cfg.Security.EnableNoise,
-		cfg.Network.EnableNAT,
-		cfg.Network.EnableHolePunch,
-		cfg.Network.EnableRelay,
-	)
-	if err != nil {
-		log.Fatalf("Failed to create transport layer: %v", err)
-	}
-
-	// Создаем сервисы
-	log.Printf("🔧 Создаем core сервисы...")
-	chatService := core.NewChatService(storageRepo, transportLayer)
-	contactService := core.NewContactService(storageRepo, transportLayer)
-	networkService := core.NewNetworkService(transportLayer, contactService, chatService)
-
-	// Создаем TUI интерфейс
-	log.Printf("🖥️ Создаем TUI интерфейс...")
-	tuiChat := ui.NewTUIChat(chatService, contactService, networkService)
-
-	// Создаем контекст с отменой
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Обрабатываем сигналы для graceful shutdown
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	// Создаем новый узел libp2p.
+	// Мы убрали опции для NAT, так как в локальной сети они не нужны.
+	node, err := libp2p.New()
+	if err != nil {
+		log.Fatalf("Не удалось создать узел libp2p: %v", err)
+	}
 
-	// Запускаем приложение в фоне
-	go func() {
-		if err := tuiChat.Start(); err != nil {
-			log.Printf("Error starting TUI: %v", err)
-			cancel()
+	log.Printf("✅ Узел создан. Ваш PeerID: %s", node.ID().String())
+	log.Println("Адреса для прослушивания:")
+	for _, addr := range node.Addrs() {
+		fmt.Printf("  %s/p2p/%s\n", addr, node.ID().String())
+	}
+
+	// Устанавливаем обработчик для нашего протокола
+	node.SetStreamHandler(PROTOCOL_ID, handleStream)
+
+	// --- Запускаем mDNS для обнаружения в локальной сети ---
+	// Это самая важная часть, которая решает вашу проблему.
+	notifee := &discoveryNotifee{node: node, ctx: ctx}
+	mdnsService := mdns.NewMdnsService(node, DISCOVERY_TAG, notifee)
+	if err := mdnsService.Start(); err != nil {
+		log.Fatalf("Не удалось запустить mDNS: %v", err)
+	}
+	log.Println("📡 Сервис mDNS запущен. Идет поиск других участников...")
+
+	// --- Чтение сообщений из консоли и отправка ---
+	// Используем sync.Mutex для безопасного доступа к списку пиров из разных горутин
+	var peersMux sync.Mutex
+
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		message := scanner.Text()
+
+		peersMux.Lock()
+		peers := node.Network().Peers()
+		peersMux.Unlock()
+
+		if len(peers) == 0 {
+			log.Println("Нет подключенных участников для отправки сообщения.")
+			continue
 		}
-	}()
 
-	// Если указан адрес для прямого подключения, подключаемся
-	if *destAddr != "" {
-		go func() {
-			// Ждем немного, чтобы основной узел успел запуститься
-			select {
-			case <-time.After(5 * time.Second):
-				log.Printf("🔗 Попытка прямого подключения к %s", *destAddr)
-				if err := transportLayer.ConnectDirectly(context.Background(), *destAddr); err != nil {
-					log.Printf("❌ Ошибка прямого подключения: %v", err)
-				} else {
-					log.Printf("✅ Прямое подключение установлено")
-				}
-			case <-ctx.Done():
-				return
+		// Отправляем сообщение всем, с кем установлено соединение
+		for _, p := range peers {
+			// Открываем новый поток для каждого сообщения
+			stream, err := node.NewStream(ctx, p, PROTOCOL_ID)
+			if err != nil {
+				log.Printf("Не удалось открыть поток к %s: %v", p.ShortString(), err)
+				continue
 			}
-		}()
+
+			_, err = stream.Write([]byte(message + "\n"))
+			if err != nil {
+				log.Printf("Не удалось отправить сообщение к %s: %v\n", p.ShortString(), err)
+			} else {
+				log.Printf("📤 Вам -> %s: %s", p.ShortString(), message)
+			}
+			// Важно: закрываем поток после отправки одного сообщения
+			stream.Close()
+		}
 	}
-
-	// Ждем сигнала завершения
-	<-sigChan
-	log.Println("\n🛑 Получен сигнал завершения, останавливаем приложение...")
-
-	// Останавливаем все сервисы
-	cancel()
-
-	// Останавливаем сетевой сервис
-	if err := networkService.Stop(context.Background()); err != nil {
-		log.Printf("Warning: failed to stop network service: %v", err)
-	}
-
-	log.Println("👋 Приложение остановлено")
 }
