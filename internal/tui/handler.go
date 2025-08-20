@@ -11,14 +11,14 @@ import (
 
 // Handler обрабатывает пользовательский ввод
 type Handler struct {
-	node *core.Node
-	mu   sync.Mutex
+	controller core.ICoreController
+	mu         sync.Mutex
 }
 
 // NewHandler создает новый TUI обработчик
-func NewHandler(node *core.Node) *Handler {
+func NewHandler(controller core.ICoreController) *Handler {
 	return &Handler{
-		node: node,
+		controller: controller,
 	}
 }
 
@@ -57,7 +57,11 @@ func (h *Handler) Start() error {
 
 		// Отправляем сообщение всем пирам
 		if message != "" {
-			h.node.BroadcastMessage(message)
+			if err := h.controller.Broadcast([]byte(message)); err != nil {
+				log.Printf("❌ Ошибка отправки: %v", err)
+			} else {
+				log.Printf("📤 Отправлено: %s", message)
+			}
 		}
 	}
 
@@ -77,7 +81,7 @@ func (h *Handler) showHelp() {
 // showPeers показывает список подключенных пиров
 func (h *Handler) showPeers() {
 	h.mu.Lock()
-	peers := h.node.GetPeers()
+	peers := h.controller.GetPeers()
 	h.mu.Unlock()
 
 	if len(peers) == 0 {
