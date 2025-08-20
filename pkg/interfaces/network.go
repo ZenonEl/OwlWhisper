@@ -36,7 +36,7 @@ type NetworkService interface {
 
 // PeerInfo содержит информацию о пире
 type PeerInfo struct {
-	ID      peer.ID
-	Address string
-	Latency int64 // в миллисекундах
+	ID      string `json:"id"`
+	Address string `json:"address"`
+	Latency int64  `json:"latency"` // в миллисекундах
 }
