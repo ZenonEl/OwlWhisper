@@ -599,8 +599,7 @@ const file_internal_protocol_chat_proto_rawDesc = "" +
 	"\x05limit\x18\x03 \x01(\x05R\x05limit\"_\n" +
 	"\x12GetHistoryResponse\x12.\n" +
 	"\bmessages\x18\x01 \x03(\v2\x12.protocol.EnvelopeR\bmessages\x12\x19\n" +
-	"\bhas_more\x18\x02 \x01(\bR\ahasMoreB\fZ\n" +
-	"./protocolb\x06proto3"
+	"\bhas_more\x18\x02 \x01(\bR\ahasMoreB\x1eZ\x1cOwlWhisper/internal/protocolb\x06proto3"
 
 var (
 	file_internal_protocol_chat_proto_rawDescOnce sync.Once
