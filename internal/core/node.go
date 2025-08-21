@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -48,7 +49,7 @@ type Node struct {
 	persistence *PersistenceManager
 }
 
-// NewNode создает новый libp2p узел
+// NewNode создает новый libp2p узел (для обратной совместимости)
 func NewNode(ctx context.Context) (*Node, error) {
 	// Создаем менеджер персистентности
 	persistence, err := NewPersistenceManager()
@@ -62,13 +63,29 @@ func NewNode(ctx context.Context) (*Node, error) {
 		return nil, fmt.Errorf("не удалось загрузить/создать ключ идентичности: %w", err)
 	}
 
+	return NewNodeWithKey(ctx, privKey, persistence)
+}
+
+// NewNodeWithKeyBytes создает новый libp2p узел с переданными байтами ключа
+func NewNodeWithKeyBytes(ctx context.Context, keyBytes []byte, persistence *PersistenceManager) (*Node, error) {
+	// Десериализуем ключ из байтов
+	privKey, err := crypto.UnmarshalPrivateKey(keyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось десериализовать ключ из байтов: %w", err)
+	}
+
+	return NewNodeWithKey(ctx, privKey, persistence)
+}
+
+// NewNodeWithKey создает новый libp2p узел с переданным ключом
+func NewNodeWithKey(ctx context.Context, privKey crypto.PrivKey, persistence *PersistenceManager) (*Node, error) {
 	// Получаем PeerID из ключа
 	peerID, err := peer.IDFromPrivateKey(privKey)
 	if err != nil {
 		return nil, fmt.Errorf("не удалось получить PeerID из ключа: %w", err)
 	}
 
-	Info("🔑 Загружен ключ для PeerID: %s", peerID.String())
+	Info("🔑 Создаем узел с ключом для PeerID: %s", peerID.String())
 
 	opts := []libp2p.Option{
 		libp2p.Identity(privKey),

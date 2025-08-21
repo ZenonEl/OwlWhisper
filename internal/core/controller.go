@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
@@ -71,7 +72,7 @@ type CoreController struct {
 	userProfile *UserProfile
 }
 
-// NewCoreController создает новый Core контроллер
+// NewCoreController создает новый Core контроллер (для обратной совместимости)
 func NewCoreController(ctx context.Context) (*CoreController, error) {
 	ctx, cancel := context.WithCancel(ctx)
 
@@ -82,6 +83,53 @@ func NewCoreController(ctx context.Context) (*CoreController, error) {
 		return nil, fmt.Errorf("не удалось создать Node: %w", err)
 	}
 
+	return createControllerFromNode(ctx, cancel, node)
+}
+
+// NewCoreControllerWithKey создает новый Core контроллер с переданным ключом
+func NewCoreControllerWithKey(ctx context.Context, privKey crypto.PrivKey) (*CoreController, error) {
+	ctx, cancel := context.WithCancel(ctx)
+
+	// Создаем PersistenceManager
+	persistence, err := NewPersistenceManager()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("не удалось создать PersistenceManager: %w", err)
+	}
+
+	// Создаем Node с переданным ключом
+	node, err := NewNodeWithKey(ctx, privKey, persistence)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("не удалось создать Node с ключом: %w", err)
+	}
+
+	return createControllerFromNode(ctx, cancel, node)
+}
+
+// NewCoreControllerWithKeyBytes создает новый Core контроллер с переданными байтами ключа
+func NewCoreControllerWithKeyBytes(ctx context.Context, keyBytes []byte) (*CoreController, error) {
+	ctx, cancel := context.WithCancel(ctx)
+
+	// Создаем PersistenceManager
+	persistence, err := NewPersistenceManager()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("не удалось создать PersistenceManager: %w", err)
+	}
+
+	// Создаем Node с переданными байтами ключа
+	node, err := NewNodeWithKeyBytes(ctx, keyBytes, persistence)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("не удалось создать Node с байтами ключа: %w", err)
+	}
+
+	return createControllerFromNode(ctx, cancel, node)
+}
+
+// createControllerFromNode создает контроллер из готового узла
+func createControllerFromNode(ctx context.Context, cancel context.CancelFunc, node *Node) (*CoreController, error) {
 	// Создаем DiscoveryManager с callback для новых пиров
 	discovery, err := NewDiscoveryManager(ctx, node.GetHost(), func(pi peer.AddrInfo) {
 		// Когда найден новый пир, добавляем его в Node

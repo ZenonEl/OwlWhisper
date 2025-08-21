@@ -19,6 +19,10 @@ import (
 // Глобальный экземпляр CoreController
 var globalController *CoreController
 
+// Глобальный контекст для управления жизненным циклом
+var globalCtx context.Context
+var globalCancel context.CancelFunc
+
 // Система управления памятью для строк
 var (
 	stringPoolMutex sync.RWMutex
@@ -71,19 +75,55 @@ func StartOwlWhisper() C.int {
 	return 0
 }
 
+//export StartOwlWhisperWithKey
+func StartOwlWhisperWithKey(keyBytes *C.char, keyLength C.int) C.int {
+	// Инициализируем логгер по умолчанию (только в консоль)
+	InitGlobalLogger(LogLevelInfo, LogOutputConsole, "")
+
+	// Создаем контекст
+	globalCtx, globalCancel = context.WithCancel(context.Background())
+
+	// Конвертируем C строку в Go байты
+	goKeyBytes := C.GoBytes(unsafe.Pointer(keyBytes), keyLength)
+
+	// Создаем Core контроллер с переданным ключом
+	controller, err := NewCoreControllerWithKeyBytes(globalCtx, goKeyBytes)
+	if err != nil {
+		Error("❌ Ошибка создания Core контроллера с ключом: %v", err)
+		return C.int(1) // Ошибка
+	}
+
+	// Запускаем контроллер
+	if err := controller.Start(); err != nil {
+		Error("❌ Ошибка запуска Core контроллера: %v", err)
+		return C.int(1) // Ошибка
+	}
+
+	// Сохраняем глобальный экземпляр
+	globalController = controller
+
+	return C.int(0) // Успех
+}
+
 //export StopOwlWhisper
 func StopOwlWhisper() C.int {
 	if globalController == nil {
-		return -1
+		return C.int(1) // Ошибка
 	}
 
 	err := globalController.Stop()
 	if err != nil {
-		return -1
+		Error("❌ Ошибка остановки Core контроллера: %v", err)
+		return C.int(1) // Ошибка
+	}
+
+	// Отменяем контекст
+	if globalCancel != nil {
+		globalCancel()
 	}
 
 	globalController = nil
-	return 0
+	return C.int(0) // Успех
 }
 
 //export SendMessage

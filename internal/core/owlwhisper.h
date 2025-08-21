@@ -7,6 +7,7 @@ extern "C" {
 
 // Инициализация и управление
 int StartOwlWhisper();
+int StartOwlWhisperWithKey(char* keyBytes, int keyLength);
 int StopOwlWhisper();
 
 // Отправка сообщений
