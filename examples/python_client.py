@@ -18,7 +18,7 @@ import os
 def load_library():
     """Загружает библиотеку OwlWhisper"""
     # Путь к библиотеке
-    lib_path = "./dist/libowlwhisper.so"
+    lib_path = "../dist/libowlwhisper.so"
     
     # Проверяем существование файла
     if not os.path.exists(lib_path):
@@ -27,7 +27,37 @@ def load_library():
         sys.exit(1)
     
     try:
-        return ctypes.CDLL(lib_path)
+        lib = ctypes.CDLL(lib_path)
+        
+        # Настраиваем типы для функций, возвращающих строки
+        lib.GetMyPeerID.restype = ctypes.c_char_p
+        lib.GetPeers.restype = ctypes.c_char_p
+        lib.GetConnectionStatus.restype = ctypes.c_char_p
+        lib.GetMyProfile.restype = ctypes.c_char_p
+        lib.GetPeerProfile.restype = ctypes.c_char_p
+        lib.GetChatHistory.restype = ctypes.c_char_p
+        lib.GetChatHistoryLimit.restype = ctypes.c_char_p
+        
+        # Настраиваем типы для функций, принимающих строки
+        lib.SendMessage.argtypes = [ctypes.c_char_p]
+        lib.SendMessageToPeer.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+        lib.UpdateMyProfile.argtypes = [ctypes.c_char_p]
+        lib.GetPeerProfile.argtypes = [ctypes.c_char_p]
+        lib.ConnectToPeer.argtypes = [ctypes.c_char_p]
+        lib.SetLogOutput.argtypes = [ctypes.c_int, ctypes.c_char_p]
+        lib.FreeString.argtypes = [ctypes.c_char_p]
+        
+        # Настраиваем типы возвращаемых значений для функций, возвращающих int
+        lib.StartOwlWhisper.restype = ctypes.c_int
+        lib.StopOwlWhisper.restype = ctypes.c_int
+        lib.SendMessage.restype = ctypes.c_int
+        lib.SendMessageToPeer.restype = ctypes.c_int
+        lib.UpdateMyProfile.restype = ctypes.c_int
+        lib.ConnectToPeer.restype = ctypes.c_int
+        lib.SetLogLevel.restype = ctypes.c_int
+        lib.SetLogOutput.restype = ctypes.c_int
+        
+        return lib
     except OSError as e:
         print(f"❌ Ошибка загрузки библиотеки: {e}")
         print("💡 Установите переменную окружения: export LD_LIBRARY_PATH=./dist:$LD_LIBRARY_PATH")
@@ -38,7 +68,9 @@ def safe_get_string(owlwhisper, func_call):
     try:
         result_ptr = func_call()
         if result_ptr:
-            result_str = ctypes.string_at(result_ptr).decode('utf-8')
+            # result_ptr уже содержит указатель на C строку благодаря restype
+            result_str = result_ptr.decode('utf-8')
+            # Преобразуем обратно в указатель для FreeString
             owlwhisper.FreeString(result_ptr)
             return result_str
         return ""
