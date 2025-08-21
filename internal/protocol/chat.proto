@@ -30,6 +30,7 @@ message Envelope {
     oneof payload {
         Content content = 6;            // Полезная нагрузка (текст, файл, и т.д.)
         ReadReceipts read_receipts = 7; // Уведомление о прочтении
+        ProfileInfo profile_info = 8;   // Информация о профиле (НОВОЕ!)
     }
 }
 
@@ -64,6 +65,22 @@ message ReadReceipts {
     repeated string message_ids = 1; // ID прочитанных сообщений
 }
 
+// ---------------------------------------------------------------- //
+// ----------------- ПРОФИЛИ И ИДЕНТИФИКАЦИЯ ----------------- //
+// ---------------------------------------------------------------- //
+
+// ProfileInfo - информация о профиле пользователя
+message ProfileInfo {
+    string nickname = 1;           // Основной никнейм
+    string discriminator = 2;      // Дискриминатор (#xxxxxx) - из PeerID
+    string display_name = 3;       // Отображаемое имя (может отличаться от nickname)
+    string avatar_hash = 4;        // Хеш аватара (если есть)
+    int64 last_seen = 5;          // Последний раз онлайн (timestamp)
+    bool is_online = 6;           // Статус онлайн/оффлайн
+    
+    // Метаданные профиля (для мобильных платформ)
+    map<string, string> metadata = 7; // Дополнительные поля (версия приложения, платформа и т.д.)
+}
 
 // ---------------------------------------------------------------- //
 // ----------------- СООБЩЕНИЯ ДЛЯ RPC (Запрос/Ответ) ----------------- //
@@ -80,4 +97,21 @@ message GetHistoryRequest {
 message GetHistoryResponse {
     repeated Envelope messages = 1;
     bool has_more = 2; // Есть ли еще более старые сообщения
+}
+
+// ---------------------------------------------------------------- //
+// ----------------- СЕТЕВЫЕ СООБЩЕНИЯ ----------------- //
+// ---------------------------------------------------------------- //
+
+// Ping/Pong для проверки соединения (важно для мобильных платформ)
+message PingMessage {
+    int64 timestamp = 1;
+    string client_version = 2;    // Версия клиента
+    string platform = 3;          // Платформа (android/ios/desktop)
+}
+
+message PongMessage {
+    int64 timestamp = 1;
+    int64 latency_ms = 2;        // Задержка в миллисекундах
+    string server_version = 3;    // Версия сервера
 }

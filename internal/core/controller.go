@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -35,6 +36,22 @@ type ICoreController interface {
 
 	// GetHost возвращает узел
 	GetHost() host.Host
+
+	// Новые методы для работы с профилями
+	GetMyProfile() *ProfileInfo
+	UpdateMyProfile(nickname string) error
+	GetPeerProfile(peerID peer.ID) *ProfileInfo
+	SendProfileToPeer(peerID peer.ID) error
+}
+
+// ProfileInfo представляет профиль пользователя
+type ProfileInfo struct {
+	Nickname      string
+	Discriminator string
+	DisplayName   string
+	PeerID        string
+	LastSeen      time.Time
+	IsOnline      bool
 }
 
 // CoreController реализует ICoreController интерфейс
@@ -186,4 +203,65 @@ func (c *CoreController) IsRunning() bool {
 	defer c.mu.RUnlock()
 
 	return c.running
+}
+
+// IsConnected проверяет, подключен ли указанный пир
+func (c *CoreController) IsConnected(peerID peer.ID) bool {
+	return c.node.IsConnected(peerID)
+}
+
+// GetMyProfile возвращает профиль текущего узла
+func (c *CoreController) GetMyProfile() *ProfileInfo {
+	peerID := c.GetMyID()
+
+	// Генерируем discriminator из последних 6 символов PeerID
+	discriminator := ""
+	if len(peerID) >= 6 {
+		discriminator = "#" + peerID[len(peerID)-6:]
+	}
+
+	return &ProfileInfo{
+		Nickname:      "Anonymous", // По умолчанию
+		Discriminator: discriminator,
+		DisplayName:   "Anonymous" + discriminator,
+		PeerID:        peerID,
+		LastSeen:      time.Now(),
+		IsOnline:      true,
+	}
+}
+
+// UpdateMyProfile обновляет профиль текущего узла
+func (c *CoreController) UpdateMyProfile(nickname string) error {
+	// TODO: Реализовать сохранение профиля в persistence
+	// Пока просто логируем
+	log.Printf("📝 Обновление профиля: %s", nickname)
+	return nil
+}
+
+// GetPeerProfile возвращает профиль указанного пира
+func (c *CoreController) GetPeerProfile(peerID peer.ID) *ProfileInfo {
+	// TODO: Реализовать получение профиля из кэша или запрос
+	// Пока возвращаем базовую информацию
+	discriminator := ""
+	peerIDStr := peerID.String()
+	if len(peerIDStr) >= 6 {
+		discriminator = "#" + peerIDStr[len(peerIDStr)-6:]
+	}
+
+	return &ProfileInfo{
+		Nickname:      "Unknown",
+		Discriminator: discriminator,
+		DisplayName:   "Unknown" + discriminator,
+		PeerID:        peerIDStr,
+		LastSeen:      time.Now(),
+		IsOnline:      c.IsConnected(peerID),
+	}
+}
+
+// SendProfileToPeer отправляет профиль указанному пиру
+func (c *CoreController) SendProfileToPeer(peerID peer.ID) error {
+	// TODO: Реализовать отправку ProfileInfo через Protobuf
+	// Пока просто логируем
+	log.Printf("📤 Отправка профиля к %s", peerID.ShortString())
+	return nil
 }

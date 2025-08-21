@@ -44,12 +44,35 @@ type Node struct {
 	// Мьютекс для безопасного доступа к пирам
 	peersMutex sync.RWMutex
 	peers      map[peer.ID]bool
+
+	// Менеджер персистентности для управления ключами
+	persistence *PersistenceManager
 }
 
 // NewNode создает новый libp2p узел
 func NewNode(ctx context.Context) (*Node, error) {
-	// Создаем libp2p узел с опциями для глобальной сети
+	// Создаем менеджер персистентности
+	persistence, err := NewPersistenceManager()
+	if err != nil {
+		return nil, fmt.Errorf("не удалось создать менеджер персистентности: %w", err)
+	}
+
+	// Загружаем или создаем ключ идентичности
+	privKey, err := persistence.LoadOrCreateIdentity()
+	if err != nil {
+		return nil, fmt.Errorf("не удалось загрузить/создать ключ идентичности: %w", err)
+	}
+
+	// Получаем PeerID из ключа
+	peerID, err := peer.IDFromPrivateKey(privKey)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось получить PeerID из ключа: %w", err)
+	}
+
+	log.Printf("🔑 Загружен ключ для PeerID: %s", peerID.String())
+
 	opts := []libp2p.Option{
+		libp2p.Identity(privKey),
 		libp2p.EnableNATService(),
 		libp2p.EnableHolePunching(),
 		libp2p.EnableRelay(),
@@ -57,27 +80,24 @@ func NewNode(ctx context.Context) (*Node, error) {
 
 	h, err := libp2p.New(opts...)
 	if err != nil {
-		return nil, fmt.Errorf("не удалось создать узел libp2p: %w", err)
+		return nil, fmt.Errorf("не удалось создать libp2p узел: %w", err)
 	}
+
+	// Создаем канал для сообщений
+	messagesChan := make(chan RawMessage, 100)
 
 	node := &Node{
 		host:         h,
 		ctx:          ctx,
-		messagesChan: make(chan RawMessage, 100), // Буферизованный канал
-		peers:        make(map[peer.ID]bool),
+		messagesChan: messagesChan,
+		persistence:  persistence,
 	}
 
 	// Устанавливаем обработчик потоков
 	h.SetStreamHandler(PROTOCOL_ID, node.handleStream)
 
-	// Устанавливаем Network Notifiee для мониторинга
+	// Добавляем логирование сетевых событий
 	h.Network().Notify(&NetworkEventLogger{})
-
-	log.Printf("✅ Узел создан. Ваш PeerID: %s", h.ID().String())
-	log.Println("Адреса для прослушивания:")
-	for _, addr := range h.Addrs() {
-		fmt.Printf("  %s/p2p/%s\n", addr, h.ID().String())
-	}
 
 	return node, nil
 }
