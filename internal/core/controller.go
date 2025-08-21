@@ -6,6 +6,7 @@ import (
 	"log"
 	"sync"
 
+	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
@@ -31,6 +32,9 @@ type ICoreController interface {
 
 	// Messages возвращает канал для получения ВСЕХ входящих данных
 	Messages() <-chan RawMessage
+
+	// GetHost возвращает узел
+	GetHost() host.Host
 }
 
 // CoreController реализует ICoreController интерфейс
@@ -169,6 +173,11 @@ func (c *CoreController) GetPeers() []peer.ID {
 // Messages возвращает канал для получения входящих сообщений
 func (c *CoreController) Messages() <-chan RawMessage {
 	return c.node.Messages()
+}
+
+// GetHost возвращает узел
+func (c *CoreController) GetHost() host.Host {
+	return c.node.GetHost()
 }
 
 // IsRunning проверяет, запущен ли контроллер

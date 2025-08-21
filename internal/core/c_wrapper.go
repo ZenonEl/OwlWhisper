@@ -108,7 +108,21 @@ func GetPeers() *C.char {
 		return C.CString("[]")
 	}
 
+	// Получаем всех пиров из всех источников
 	peers := globalController.GetPeers()
+
+	// Если пиров нет, пробуем получить из узла напрямую
+	if len(peers) == 0 {
+		host := globalController.GetHost()
+		if host != nil {
+			// Получаем пиров из всех протоколов
+			peers = host.Network().Peers()
+
+			// Также проверяем mDNS и DHT
+			// TODO: Добавить получение пиров из discovery manager
+		}
+	}
+
 	peerStrings := make([]string, len(peers))
 
 	for i, p := range peers {
@@ -125,7 +139,17 @@ func GetConnectionStatus() *C.char {
 		return C.CString("{}")
 	}
 
+	// Получаем всех пиров из всех источников
 	peers := globalController.GetPeers()
+
+	// Если пиров нет, пробуем получить из узла напрямую
+	if len(peers) == 0 {
+		host := globalController.GetHost()
+		if host != nil {
+			peers = host.Network().Peers()
+		}
+	}
+
 	status := map[string]interface{}{
 		"connected": len(peers) > 0,
 		"peers":     len(peers),
