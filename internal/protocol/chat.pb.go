@@ -7,11 +7,12 @@
 package protocol
 
 import (
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
+
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -85,6 +86,7 @@ type Envelope struct {
 	//
 	//	*Envelope_Content
 	//	*Envelope_ReadReceipts
+	//	*Envelope_ProfileInfo
 	Payload       isEnvelope_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -180,6 +182,15 @@ func (x *Envelope) GetReadReceipts() *ReadReceipts {
 	return nil
 }
 
+func (x *Envelope) GetProfileInfo() *ProfileInfo {
+	if x != nil {
+		if x, ok := x.Payload.(*Envelope_ProfileInfo); ok {
+			return x.ProfileInfo
+		}
+	}
+	return nil
+}
+
 type isEnvelope_Payload interface {
 	isEnvelope_Payload()
 }
@@ -192,9 +203,15 @@ type Envelope_ReadReceipts struct {
 	ReadReceipts *ReadReceipts `protobuf:"bytes,7,opt,name=read_receipts,json=readReceipts,proto3,oneof"` // Уведомление о прочтении
 }
 
+type Envelope_ProfileInfo struct {
+	ProfileInfo *ProfileInfo `protobuf:"bytes,8,opt,name=profile_info,json=profileInfo,proto3,oneof"` // Информация о профиле (НОВОЕ!)
+}
+
 func (*Envelope_Content) isEnvelope_Payload() {}
 
 func (*Envelope_ReadReceipts) isEnvelope_Payload() {}
+
+func (*Envelope_ProfileInfo) isEnvelope_Payload() {}
 
 // Content - это сама "полезная нагрузка" сообщения.
 type Content struct {
@@ -444,6 +461,100 @@ func (x *ReadReceipts) GetMessageIds() []string {
 	return nil
 }
 
+// ProfileInfo - информация о профиле пользователя
+type ProfileInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Nickname      string                 `protobuf:"bytes,1,opt,name=nickname,proto3" json:"nickname,omitempty"`                          // Основной никнейм
+	Discriminator string                 `protobuf:"bytes,2,opt,name=discriminator,proto3" json:"discriminator,omitempty"`                // Дискриминатор (#xxxxxx) - из PeerID
+	DisplayName   string                 `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"` // Отображаемое имя (может отличаться от nickname)
+	AvatarHash    string                 `protobuf:"bytes,4,opt,name=avatar_hash,json=avatarHash,proto3" json:"avatar_hash,omitempty"`    // Хеш аватара (если есть)
+	LastSeen      int64                  `protobuf:"varint,5,opt,name=last_seen,json=lastSeen,proto3" json:"last_seen,omitempty"`         // Последний раз онлайн (timestamp)
+	IsOnline      bool                   `protobuf:"varint,6,opt,name=is_online,json=isOnline,proto3" json:"is_online,omitempty"`         // Статус онлайн/оффлайн
+	// Метаданные профиля (для мобильных платформ)
+	Metadata      map[string]string `protobuf:"bytes,7,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // Дополнительные поля (версия приложения, платформа и т.д.)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProfileInfo) Reset() {
+	*x = ProfileInfo{}
+	mi := &file_internal_protocol_chat_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProfileInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProfileInfo) ProtoMessage() {}
+
+func (x *ProfileInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_protocol_chat_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProfileInfo.ProtoReflect.Descriptor instead.
+func (*ProfileInfo) Descriptor() ([]byte, []int) {
+	return file_internal_protocol_chat_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *ProfileInfo) GetNickname() string {
+	if x != nil {
+		return x.Nickname
+	}
+	return ""
+}
+
+func (x *ProfileInfo) GetDiscriminator() string {
+	if x != nil {
+		return x.Discriminator
+	}
+	return ""
+}
+
+func (x *ProfileInfo) GetDisplayName() string {
+	if x != nil {
+		return x.DisplayName
+	}
+	return ""
+}
+
+func (x *ProfileInfo) GetAvatarHash() string {
+	if x != nil {
+		return x.AvatarHash
+	}
+	return ""
+}
+
+func (x *ProfileInfo) GetLastSeen() int64 {
+	if x != nil {
+		return x.LastSeen
+	}
+	return 0
+}
+
+func (x *ProfileInfo) GetIsOnline() bool {
+	if x != nil {
+		return x.IsOnline
+	}
+	return false
+}
+
+func (x *ProfileInfo) GetMetadata() map[string]string {
+	if x != nil {
+		return x.Metadata
+	}
+	return nil
+}
+
 // Запрос на получение истории сообщений
 type GetHistoryRequest struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
@@ -456,7 +567,7 @@ type GetHistoryRequest struct {
 
 func (x *GetHistoryRequest) Reset() {
 	*x = GetHistoryRequest{}
-	mi := &file_internal_protocol_chat_proto_msgTypes[5]
+	mi := &file_internal_protocol_chat_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -468,7 +579,7 @@ func (x *GetHistoryRequest) String() string {
 func (*GetHistoryRequest) ProtoMessage() {}
 
 func (x *GetHistoryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_protocol_chat_proto_msgTypes[5]
+	mi := &file_internal_protocol_chat_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -481,7 +592,7 @@ func (x *GetHistoryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetHistoryRequest.ProtoReflect.Descriptor instead.
 func (*GetHistoryRequest) Descriptor() ([]byte, []int) {
-	return file_internal_protocol_chat_proto_rawDescGZIP(), []int{5}
+	return file_internal_protocol_chat_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *GetHistoryRequest) GetChatId() string {
@@ -516,7 +627,7 @@ type GetHistoryResponse struct {
 
 func (x *GetHistoryResponse) Reset() {
 	*x = GetHistoryResponse{}
-	mi := &file_internal_protocol_chat_proto_msgTypes[6]
+	mi := &file_internal_protocol_chat_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -528,7 +639,7 @@ func (x *GetHistoryResponse) String() string {
 func (*GetHistoryResponse) ProtoMessage() {}
 
 func (x *GetHistoryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_protocol_chat_proto_msgTypes[6]
+	mi := &file_internal_protocol_chat_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -541,7 +652,7 @@ func (x *GetHistoryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetHistoryResponse.ProtoReflect.Descriptor instead.
 func (*GetHistoryResponse) Descriptor() ([]byte, []int) {
-	return file_internal_protocol_chat_proto_rawDescGZIP(), []int{6}
+	return file_internal_protocol_chat_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *GetHistoryResponse) GetMessages() []*Envelope {
@@ -558,11 +669,132 @@ func (x *GetHistoryResponse) GetHasMore() bool {
 	return false
 }
 
+// Ping/Pong для проверки соединения (важно для мобильных платформ)
+type PingMessage struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Timestamp     int64                  `protobuf:"varint,1,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	ClientVersion string                 `protobuf:"bytes,2,opt,name=client_version,json=clientVersion,proto3" json:"client_version,omitempty"` // Версия клиента
+	Platform      string                 `protobuf:"bytes,3,opt,name=platform,proto3" json:"platform,omitempty"`                                // Платформа (android/ios/desktop)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PingMessage) Reset() {
+	*x = PingMessage{}
+	mi := &file_internal_protocol_chat_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PingMessage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PingMessage) ProtoMessage() {}
+
+func (x *PingMessage) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_protocol_chat_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PingMessage.ProtoReflect.Descriptor instead.
+func (*PingMessage) Descriptor() ([]byte, []int) {
+	return file_internal_protocol_chat_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *PingMessage) GetTimestamp() int64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
+func (x *PingMessage) GetClientVersion() string {
+	if x != nil {
+		return x.ClientVersion
+	}
+	return ""
+}
+
+func (x *PingMessage) GetPlatform() string {
+	if x != nil {
+		return x.Platform
+	}
+	return ""
+}
+
+type PongMessage struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Timestamp     int64                  `protobuf:"varint,1,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	LatencyMs     int64                  `protobuf:"varint,2,opt,name=latency_ms,json=latencyMs,proto3" json:"latency_ms,omitempty"`            // Задержка в миллисекундах
+	ServerVersion string                 `protobuf:"bytes,3,opt,name=server_version,json=serverVersion,proto3" json:"server_version,omitempty"` // Версия сервера
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PongMessage) Reset() {
+	*x = PongMessage{}
+	mi := &file_internal_protocol_chat_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PongMessage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PongMessage) ProtoMessage() {}
+
+func (x *PongMessage) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_protocol_chat_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PongMessage.ProtoReflect.Descriptor instead.
+func (*PongMessage) Descriptor() ([]byte, []int) {
+	return file_internal_protocol_chat_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *PongMessage) GetTimestamp() int64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
+func (x *PongMessage) GetLatencyMs() int64 {
+	if x != nil {
+		return x.LatencyMs
+	}
+	return 0
+}
+
+func (x *PongMessage) GetServerVersion() string {
+	if x != nil {
+		return x.ServerVersion
+	}
+	return ""
+}
+
 var File_internal_protocol_chat_proto protoreflect.FileDescriptor
 
 const file_internal_protocol_chat_proto_rawDesc = "" +
 	"\n" +
-	"\x1cinternal/protocol/chat.proto\x12\bprotocol\"\xdd\x02\n" +
+	"\x1cinternal/protocol/chat.proto\x12\bprotocol\"\x99\x03\n" +
 	"\bEnvelope\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1b\n" +
@@ -571,7 +803,8 @@ const file_internal_protocol_chat_proto_rawDesc = "" +
 	"\tchat_type\x18\x04 \x01(\x0e2\x1b.protocol.Envelope.ChatTypeR\bchatType\x12\x17\n" +
 	"\achat_id\x18\x05 \x01(\tR\x06chatId\x12-\n" +
 	"\acontent\x18\x06 \x01(\v2\x11.protocol.ContentH\x00R\acontent\x12=\n" +
-	"\rread_receipts\x18\a \x01(\v2\x16.protocol.ReadReceiptsH\x00R\freadReceipts\"\"\n" +
+	"\rread_receipts\x18\a \x01(\v2\x16.protocol.ReadReceiptsH\x00R\freadReceipts\x12:\n" +
+	"\fprofile_info\x18\b \x01(\v2\x15.protocol.ProfileInfoH\x00R\vprofileInfo\"\"\n" +
 	"\bChatType\x12\v\n" +
 	"\aPRIVATE\x10\x00\x12\t\n" +
 	"\x05GROUP\x10\x01B\t\n" +
@@ -592,14 +825,35 @@ const file_internal_protocol_chat_proto_rawDesc = "" +
 	"hashSha256\"/\n" +
 	"\fReadReceipts\x12\x1f\n" +
 	"\vmessage_ids\x18\x01 \x03(\tR\n" +
-	"messageIds\"m\n" +
+	"messageIds\"\xcb\x02\n" +
+	"\vProfileInfo\x12\x1a\n" +
+	"\bnickname\x18\x01 \x01(\tR\bnickname\x12$\n" +
+	"\rdiscriminator\x18\x02 \x01(\tR\rdiscriminator\x12!\n" +
+	"\fdisplay_name\x18\x03 \x01(\tR\vdisplayName\x12\x1f\n" +
+	"\vavatar_hash\x18\x04 \x01(\tR\n" +
+	"avatarHash\x12\x1b\n" +
+	"\tlast_seen\x18\x05 \x01(\x03R\blastSeen\x12\x1b\n" +
+	"\tis_online\x18\x06 \x01(\bR\bisOnline\x12?\n" +
+	"\bmetadata\x18\a \x03(\v2#.protocol.ProfileInfo.MetadataEntryR\bmetadata\x1a;\n" +
+	"\rMetadataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"m\n" +
 	"\x11GetHistoryRequest\x12\x17\n" +
 	"\achat_id\x18\x01 \x01(\tR\x06chatId\x12)\n" +
 	"\x10before_timestamp\x18\x02 \x01(\x03R\x0fbeforeTimestamp\x12\x14\n" +
 	"\x05limit\x18\x03 \x01(\x05R\x05limit\"_\n" +
 	"\x12GetHistoryResponse\x12.\n" +
 	"\bmessages\x18\x01 \x03(\v2\x12.protocol.EnvelopeR\bmessages\x12\x19\n" +
-	"\bhas_more\x18\x02 \x01(\bR\ahasMoreB\x1eZ\x1cOwlWhisper/internal/protocolb\x06proto3"
+	"\bhas_more\x18\x02 \x01(\bR\ahasMore\"n\n" +
+	"\vPingMessage\x12\x1c\n" +
+	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\x12%\n" +
+	"\x0eclient_version\x18\x02 \x01(\tR\rclientVersion\x12\x1a\n" +
+	"\bplatform\x18\x03 \x01(\tR\bplatform\"q\n" +
+	"\vPongMessage\x12\x1c\n" +
+	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\x12\x1d\n" +
+	"\n" +
+	"latency_ms\x18\x02 \x01(\x03R\tlatencyMs\x12%\n" +
+	"\x0eserver_version\x18\x03 \x01(\tR\rserverVersionB\x1eZ\x1cOwlWhisper/internal/protocolb\x06proto3"
 
 var (
 	file_internal_protocol_chat_proto_rawDescOnce sync.Once
@@ -614,7 +868,7 @@ func file_internal_protocol_chat_proto_rawDescGZIP() []byte {
 }
 
 var file_internal_protocol_chat_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_internal_protocol_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_internal_protocol_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_internal_protocol_chat_proto_goTypes = []any{
 	(Envelope_ChatType)(0),     // 0: protocol.Envelope.ChatType
 	(*Envelope)(nil),           // 1: protocol.Envelope
@@ -622,21 +876,27 @@ var file_internal_protocol_chat_proto_goTypes = []any{
 	(*TextMessage)(nil),        // 3: protocol.TextMessage
 	(*FileMetadata)(nil),       // 4: protocol.FileMetadata
 	(*ReadReceipts)(nil),       // 5: protocol.ReadReceipts
-	(*GetHistoryRequest)(nil),  // 6: protocol.GetHistoryRequest
-	(*GetHistoryResponse)(nil), // 7: protocol.GetHistoryResponse
+	(*ProfileInfo)(nil),        // 6: protocol.ProfileInfo
+	(*GetHistoryRequest)(nil),  // 7: protocol.GetHistoryRequest
+	(*GetHistoryResponse)(nil), // 8: protocol.GetHistoryResponse
+	(*PingMessage)(nil),        // 9: protocol.PingMessage
+	(*PongMessage)(nil),        // 10: protocol.PongMessage
+	nil,                        // 11: protocol.ProfileInfo.MetadataEntry
 }
 var file_internal_protocol_chat_proto_depIdxs = []int32{
-	0, // 0: protocol.Envelope.chat_type:type_name -> protocol.Envelope.ChatType
-	2, // 1: protocol.Envelope.content:type_name -> protocol.Content
-	5, // 2: protocol.Envelope.read_receipts:type_name -> protocol.ReadReceipts
-	3, // 3: protocol.Content.text:type_name -> protocol.TextMessage
-	4, // 4: protocol.Content.file:type_name -> protocol.FileMetadata
-	1, // 5: protocol.GetHistoryResponse.messages:type_name -> protocol.Envelope
-	6, // [6:6] is the sub-list for method output_type
-	6, // [6:6] is the sub-list for method input_type
-	6, // [6:6] is the sub-list for extension type_name
-	6, // [6:6] is the sub-list for extension extendee
-	0, // [0:6] is the sub-list for field type_name
+	0,  // 0: protocol.Envelope.chat_type:type_name -> protocol.Envelope.ChatType
+	2,  // 1: protocol.Envelope.content:type_name -> protocol.Content
+	5,  // 2: protocol.Envelope.read_receipts:type_name -> protocol.ReadReceipts
+	6,  // 3: protocol.Envelope.profile_info:type_name -> protocol.ProfileInfo
+	3,  // 4: protocol.Content.text:type_name -> protocol.TextMessage
+	4,  // 5: protocol.Content.file:type_name -> protocol.FileMetadata
+	11, // 6: protocol.ProfileInfo.metadata:type_name -> protocol.ProfileInfo.MetadataEntry
+	1,  // 7: protocol.GetHistoryResponse.messages:type_name -> protocol.Envelope
+	8,  // [8:8] is the sub-list for method output_type
+	8,  // [8:8] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_internal_protocol_chat_proto_init() }
@@ -647,6 +907,7 @@ func file_internal_protocol_chat_proto_init() {
 	file_internal_protocol_chat_proto_msgTypes[0].OneofWrappers = []any{
 		(*Envelope_Content)(nil),
 		(*Envelope_ReadReceipts)(nil),
+		(*Envelope_ProfileInfo)(nil),
 	}
 	file_internal_protocol_chat_proto_msgTypes[1].OneofWrappers = []any{
 		(*Content_Text)(nil),
@@ -658,7 +919,7 @@ func file_internal_protocol_chat_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_protocol_chat_proto_rawDesc), len(file_internal_protocol_chat_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   7,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

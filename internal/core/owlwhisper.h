@@ -25,8 +25,13 @@ char* GetChatHistoryLimit(char* peerID, int limit);
 // Подключение к пирам
 int ConnectToPeer(char* peerID);
 
-// Освобождение памяти
-void FreeString(char* str);
+// Функции для работы с профилями
+extern char* GetMyProfile();
+extern int UpdateMyProfile(char* nickname);
+extern char* GetPeerProfile(char* peer_id);
+
+// Функции для управления памятью
+extern void FreeString(char* str);
 
 #ifdef __cplusplus
 }

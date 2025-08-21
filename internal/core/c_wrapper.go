@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"unsafe"
 
+	"time"
+
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
@@ -204,4 +206,65 @@ func ConnectToPeer(peerID *C.char) C.int {
 //export FreeString
 func FreeString(str *C.char) {
 	C.free(unsafe.Pointer(str))
+}
+
+//export GetMyProfile
+func GetMyProfile() *C.char {
+	if globalController == nil {
+		return C.CString("{}")
+	}
+
+	profile := globalController.GetMyProfile()
+	profileData := map[string]interface{}{
+		"nickname":      profile.Nickname,
+		"discriminator": profile.Discriminator,
+		"display_name":  profile.DisplayName,
+		"peer_id":       profile.PeerID,
+		"last_seen":     profile.LastSeen.Format(time.RFC3339),
+		"is_online":     profile.IsOnline,
+	}
+
+	jsonData, _ := json.Marshal(profileData)
+	return C.CString(string(jsonData))
+}
+
+//export UpdateMyProfile
+func UpdateMyProfile(nickname *C.char) C.int {
+	if globalController == nil {
+		return -1
+	}
+
+	goNickname := C.GoString(nickname)
+	err := globalController.UpdateMyProfile(goNickname)
+	if err != nil {
+		return -1
+	}
+
+	return 0
+}
+
+//export GetPeerProfile
+func GetPeerProfile(peerID *C.char) *C.char {
+	if globalController == nil {
+		return C.CString("{}")
+	}
+
+	goPeerID := C.GoString(peerID)
+	peer, err := peer.Decode(goPeerID)
+	if err != nil {
+		return C.CString("{}")
+	}
+
+	profile := globalController.GetPeerProfile(peer)
+	profileData := map[string]interface{}{
+		"nickname":      profile.Nickname,
+		"discriminator": profile.Discriminator,
+		"display_name":  profile.DisplayName,
+		"peer_id":       profile.PeerID,
+		"last_seen":     profile.LastSeen.Format(time.RFC3339),
+		"is_online":     profile.IsOnline,
+	}
+
+	jsonData, _ := json.Marshal(profileData)
+	return C.CString(string(jsonData))
 }

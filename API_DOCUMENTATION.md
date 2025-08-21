@@ -151,6 +151,54 @@ print(f"Мой ID: {status['my_id']}")
 owlwhisper.FreeString(status_data)  # Освобождаем память
 ```
 
+### 👤 Профили и идентификация
+
+#### `GetMyProfile() -> str*`
+Получает профиль текущего узла.
+- **Возвращает:** JSON-объект с информацией о профиле
+- **⚠️ Важно:** Не забудьте вызвать `FreeString()` после использования
+- **Пример:**
+```python
+import json
+
+profile_data = owlwhisper.GetMyProfile()
+profile_json = ctypes.string_at(profile_data).decode()
+profile = json.loads(profile_json)
+print(f"Никнейм: {profile['nickname']}")
+print(f"Дискриминатор: {profile['discriminator']}")
+print(f"Отображаемое имя: {profile['display_name']}")
+owlwhisper.FreeString(profile_data)  # Освобождаем память
+```
+
+#### `UpdateMyProfile(nickname: str) -> int`
+Обновляет никнейм текущего узла.
+- **Параметры:** `nickname` - новый никнейм
+- **Возвращает:** `0` при успехе, `-1` при ошибке
+- **Пример:**
+```python
+nickname = "МойНик".encode('utf-8')
+result = owlwhisper.UpdateMyProfile(nickname)
+if result == 0:
+    print("✅ Профиль обновлен")
+```
+
+#### `GetPeerProfile(peer_id: str) -> str*`
+Получает профиль указанного пира.
+- **Параметры:** `peer_id` - Peer ID пира
+- **Возвращает:** JSON-объект с информацией о профиле пира
+- **⚠️ Важно:** Не забудьте вызвать `FreeString()` после использования
+- **Пример:**
+```python
+import json
+
+peer_id = "12D3KooW...".encode('utf-8')
+profile_data = owlwhisper.GetPeerProfile(peer_id)
+profile_json = ctypes.string_at(profile_data).decode()
+profile = json.loads(profile_json)
+print(f"Пир: {profile['nickname']}{profile['discriminator']}")
+owlwhisper.FreeString(profile_data)  # Освобождаем память
+```
+
 ### 🔗 Управление подключениями
 
 #### `ConnectToPeer(peer_id: str) -> int`
