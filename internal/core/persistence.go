@@ -179,31 +179,31 @@ func (pm *PersistenceManager) GetConfigPath() string {
 // SaveProfile сохраняет профиль пользователя
 func (pm *PersistenceManager) SaveProfile(profile *UserProfile) error {
 	profilePath := filepath.Join(pm.configPath, profileFile)
-	
+
 	// Обновляем время изменения
 	profile.UpdatedAt = time.Now()
 	if profile.CreatedAt.IsZero() {
 		profile.CreatedAt = time.Now()
 	}
-	
+
 	// Сериализуем в JSON
 	data, err := json.MarshalIndent(profile, "", "  ")
 	if err != nil {
 		return fmt.Errorf("не удалось сериализовать профиль: %w", err)
 	}
-	
+
 	// Сохраняем в файл
 	if err := os.WriteFile(profilePath, data, 0600); err != nil {
 		return fmt.Errorf("не удалось сохранить профиль: %w", err)
 	}
-	
+
 	return nil
 }
 
 // LoadProfile загружает профиль пользователя
 func (pm *PersistenceManager) LoadProfile() (*UserProfile, error) {
 	profilePath := filepath.Join(pm.configPath, profileFile)
-	
+
 	// Проверяем существование файла
 	if _, err := os.Stat(profilePath); os.IsNotExist(err) {
 		// Файл не существует, возвращаем профиль по умолчанию
@@ -214,18 +214,18 @@ func (pm *PersistenceManager) LoadProfile() (*UserProfile, error) {
 			UpdatedAt:   time.Now(),
 		}, nil
 	}
-	
+
 	// Читаем файл
 	data, err := os.ReadFile(profilePath)
 	if err != nil {
 		return nil, fmt.Errorf("не удалось прочитать файл профиля: %w", err)
 	}
-	
+
 	// Десериализуем JSON
 	var profile UserProfile
 	if err := json.Unmarshal(data, &profile); err != nil {
 		return nil, fmt.Errorf("не удалось десериализовать профиль: %w", err)
 	}
-	
+
 	return &profile, nil
 }

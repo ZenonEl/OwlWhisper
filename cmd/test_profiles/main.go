@@ -75,17 +75,17 @@ func main() {
 		if profile != nil {
 			C.FreeString(profile)
 		}
-		
+
 		peers := C.GetPeers()
 		if peers != nil {
 			C.FreeString(peers)
 		}
-		
+
 		connStatus := C.GetConnectionStatus()
 		if connStatus != nil {
 			C.FreeString(connStatus)
 		}
-		
+
 		if i%20 == 0 {
 			fmt.Printf("   Прогресс: %d/100\n", i)
 		}

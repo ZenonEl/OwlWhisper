@@ -39,7 +39,7 @@ func freeString(cstr *C.char) {
 	if cstr == nil {
 		return
 	}
-	
+
 	ptr := uintptr(unsafe.Pointer(cstr))
 	stringPoolMutex.Lock()
 	if _, exists := stringPool[ptr]; exists {
@@ -189,9 +189,9 @@ func GetConnectionStatus() *C.char {
 	}
 
 	status := map[string]interface{}{
-		"connected":    len(peers) > 0,
-		"peers":        len(peers),
-		"my_peer_id":   globalController.GetMyID(),
+		"connected":  len(peers) > 0,
+		"peers":      len(peers),
+		"my_peer_id": globalController.GetMyID(),
 	}
 
 	jsonData, _ := json.Marshal(status)
