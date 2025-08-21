@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -33,15 +32,15 @@ func (n *DiscoveryNotifee) HandlePeerFound(pi peer.AddrInfo) {
 		return
 	}
 
-	log.Printf("📢 Обнаружен новый пир: %s", pi.ID.ShortString())
+	Info("📢 Обнаружен новый пир: %s", pi.ID.ShortString())
 
 	// Пытаемся подключиться
 	if err := n.node.Connect(n.ctx, pi); err != nil {
-		log.Printf("❌ Не удалось подключиться к %s: %v", pi.ID.ShortString(), err)
+		Error("❌ Не удалось подключиться к %s: %v", pi.ID.ShortString(), err)
 		return
 	}
 
-	log.Printf("✅ Успешное подключение к %s", pi.ID.ShortString())
+	Info("✅ Успешное подключение к %s", pi.ID.ShortString())
 
 	// Уведомляем о новом пире
 	if n.onPeer != nil {
@@ -107,13 +106,13 @@ func (dm *DiscoveryManager) Start() error {
 	if err := dm.mdnsService.Start(); err != nil {
 		return fmt.Errorf("не удалось запустить mDNS: %w", err)
 	}
-	log.Println("📡 mDNS сервис запущен")
+	Info("📡 mDNS сервис запущен")
 
 	// Подключаемся к bootstrap узлам
 	if err := dm.dht.Bootstrap(dm.ctx); err != nil {
-		log.Printf("⚠️ Не удалось подключиться к bootstrap узлам: %v", err)
+		Warn("⚠️ Не удалось подключиться к bootstrap узлам: %v", err)
 	} else {
-		log.Println("✅ Bootstrap завершен")
+		Info("✅ Bootstrap завершен")
 	}
 
 	// Запускаем mDNS discovery в фоне
@@ -142,7 +141,7 @@ func (dm *DiscoveryManager) Stop() error {
 
 // startMDNSDiscovery запускает mDNS discovery
 func (dm *DiscoveryManager) startMDNSDiscovery() {
-	log.Println("🏠 Поиск локальных пиров через mDNS...")
+	Info("🏠 Поиск локальных пиров через mDNS...")
 
 	// mDNS работает автоматически через DiscoveryNotifee
 	// Просто ждем завершения контекста
@@ -151,7 +150,7 @@ func (dm *DiscoveryManager) startMDNSDiscovery() {
 
 // startDHTDiscovery запускает поиск через DHT
 func (dm *DiscoveryManager) startDHTDiscovery() {
-	log.Println("🌐 Подключение к bootstrap узлам...")
+	Info("🌐 Подключение к bootstrap узлам...")
 
 	// ИЗМЕНЕНИЕ: Ждем, пока мы подключимся хотя бы к одному bootstrap-пиру.
 	// Это гарантирует, что наша таблица не пуста перед анонсом.
@@ -162,15 +161,15 @@ func (dm *DiscoveryManager) startDHTDiscovery() {
 		go func() {
 			defer wg.Done()
 			if err := dm.host.Connect(dm.ctx, *peerinfo); err != nil {
-				// log.Printf("Не удалось подключиться к bootstrap-пиру: %s", err)
+				// Info("Не удалось подключиться к bootstrap-пиру: %s", err)
 			} else {
-				log.Printf("✅ Установлено соединение с bootstrap-пиром: %s", peerinfo.ID.ShortString())
+				Info("✅ Установлено соединение с bootstrap-пиром: %s", peerinfo.ID.ShortString())
 			}
 		}()
 	}
 	wg.Wait()
 
-	log.Println("📢 Анонсируемся в глобальной сети...")
+	Info("📢 Анонсируемся в глобальной сети...")
 	// Используем Ticker для периодического анонсирования, чтобы оставаться видимыми
 	ticker := time.NewTicker(time.Minute * 1)
 	defer ticker.Stop()
@@ -181,10 +180,10 @@ func (dm *DiscoveryManager) startDHTDiscovery() {
 			case <-dm.ctx.Done():
 				return
 			case <-ticker.C:
-				log.Println("📢 Повторно анонсируемся в сети...")
+				Info("📢 Повторно анонсируемся в сети...")
 				_, err := dm.routingDiscovery.Advertise(dm.ctx, GLOBAL_RENDEZVOUS)
 				if err != nil {
-					log.Printf("⚠️ Ошибка повторного анонса: %v", err)
+					Warn("⚠️ Ошибка повторного анонса: %v", err)
 				}
 			}
 		}
@@ -193,15 +192,15 @@ func (dm *DiscoveryManager) startDHTDiscovery() {
 	// Первоначальный анонс
 	_, err := dm.routingDiscovery.Advertise(dm.ctx, GLOBAL_RENDEZVOUS)
 	if err != nil {
-		log.Printf("⚠️ Ошибка первоначального анонса: %v", err)
+		Warn("⚠️ Ошибка первоначального анонса: %v", err)
 	} else {
-		log.Printf("📢 Первоначальный анонс успешен")
+		Info("📢 Первоначальный анонс успешен")
 	}
 
-	log.Println("🔍 Поиск участников в глобальной сети...")
+	Info("🔍 Поиск участников в глобальной сети...")
 	peerChan, err := dm.routingDiscovery.FindPeers(dm.ctx, GLOBAL_RENDEZVOUS)
 	if err != nil {
-		log.Printf("⚠️ Ошибка поиска в глобальной сети: %v", err)
+		Warn("⚠️ Ошибка поиска в глобальной сети: %v", err)
 		return
 	}
 
@@ -210,7 +209,7 @@ func (dm *DiscoveryManager) startDHTDiscovery() {
 			continue
 		}
 
-		log.Printf("🌐 Найден участник в глобальной сети: %s", p.ID.ShortString())
+		Info("🌐 Найден участник в глобальной сети: %s", p.ID.ShortString())
 		dm.notifee.HandlePeerFound(p)
 	}
 }

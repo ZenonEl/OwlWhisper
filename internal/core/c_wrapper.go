@@ -9,9 +9,9 @@ import "C"
 import (
 	"context"
 	"encoding/json"
-	"unsafe"
-
+	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/libp2p/go-libp2p/core/peer"
 )
@@ -19,8 +19,44 @@ import (
 // Глобальный экземпляр CoreController
 var globalController *CoreController
 
+// Система управления памятью для строк
+var (
+	stringPoolMutex sync.RWMutex
+	stringPool      = make(map[uintptr]*C.char)
+)
+
+// allocString безопасно создает C строку и запоминает её для освобождения
+func allocString(s string) *C.char {
+	cstr := C.CString(s)
+	stringPoolMutex.Lock()
+	stringPool[uintptr(unsafe.Pointer(cstr))] = cstr
+	stringPoolMutex.Unlock()
+	return cstr
+}
+
+// freeString безопасно освобождает C строку
+func freeString(cstr *C.char) {
+	if cstr == nil {
+		return
+	}
+	
+	ptr := uintptr(unsafe.Pointer(cstr))
+	stringPoolMutex.Lock()
+	if _, exists := stringPool[ptr]; exists {
+		delete(stringPool, ptr)
+		stringPoolMutex.Unlock()
+		C.free(unsafe.Pointer(cstr))
+	} else {
+		stringPoolMutex.Unlock()
+		// Строка не найдена в пуле - возможно уже освобождена
+	}
+}
+
 //export StartOwlWhisper
 func StartOwlWhisper() C.int {
+	// Инициализируем логгер по умолчанию (только в консоль)
+	InitGlobalLogger(LogLevelInfo, LogOutputConsole, "")
+
 	var err error
 	globalController, err = NewCoreController(context.Background())
 	if err != nil {
@@ -97,17 +133,17 @@ func SendMessageToPeer(peerID, text *C.char) C.int {
 //export GetMyPeerID
 func GetMyPeerID() *C.char {
 	if globalController == nil {
-		return C.CString("")
+		return allocString("")
 	}
 
 	peerID := globalController.GetMyID()
-	return C.CString(peerID)
+	return allocString(peerID)
 }
 
 //export GetPeers
 func GetPeers() *C.char {
 	if globalController == nil {
-		return C.CString("[]")
+		return allocString("[]")
 	}
 
 	// Получаем всех пиров из всех источников
@@ -132,7 +168,7 @@ func GetPeers() *C.char {
 	}
 
 	jsonData, _ := json.Marshal(peerStrings)
-	return C.CString(string(jsonData))
+	return allocString(string(jsonData))
 }
 
 //export GetConnectionStatus
@@ -153,13 +189,13 @@ func GetConnectionStatus() *C.char {
 	}
 
 	status := map[string]interface{}{
-		"connected": len(peers) > 0,
-		"peers":     len(peers),
-		"my_id":     globalController.GetMyID(),
+		"connected":    len(peers) > 0,
+		"peers":        len(peers),
+		"my_peer_id":   globalController.GetMyID(),
 	}
 
 	jsonData, _ := json.Marshal(status)
-	return C.CString(string(jsonData))
+	return allocString(string(jsonData))
 }
 
 //export GetChatHistory
@@ -170,7 +206,7 @@ func GetChatHistory(peerID *C.char) *C.char {
 		{"id": "1", "text": "Привет!", "timestamp": "2025-08-20T20:00:00Z"},
 	}
 	jsonData, _ := json.Marshal(history)
-	return C.CString(string(jsonData))
+	return allocString(string(jsonData))
 }
 
 //export GetChatHistoryLimit
@@ -181,7 +217,7 @@ func GetChatHistoryLimit(peerID *C.char, limit C.int) *C.char {
 		{"id": "1", "text": "Привет!", "timestamp": "2025-08-20T20:00:00Z"},
 	}
 	jsonData, _ := json.Marshal(history)
-	return C.CString(string(jsonData))
+	return allocString(string(jsonData))
 }
 
 //export ConnectToPeer
@@ -205,13 +241,13 @@ func ConnectToPeer(peerID *C.char) C.int {
 
 //export FreeString
 func FreeString(str *C.char) {
-	C.free(unsafe.Pointer(str))
+	freeString(str)
 }
 
 //export GetMyProfile
 func GetMyProfile() *C.char {
 	if globalController == nil {
-		return C.CString("{}")
+		return allocString("{}")
 	}
 
 	profile := globalController.GetMyProfile()
@@ -225,7 +261,7 @@ func GetMyProfile() *C.char {
 	}
 
 	jsonData, _ := json.Marshal(profileData)
-	return C.CString(string(jsonData))
+	return allocString(string(jsonData))
 }
 
 //export UpdateMyProfile
@@ -246,16 +282,16 @@ func UpdateMyProfile(nickname *C.char) C.int {
 //export GetPeerProfile
 func GetPeerProfile(peerID *C.char) *C.char {
 	if globalController == nil {
-		return C.CString("{}")
+		return allocString("{}")
 	}
 
 	goPeerID := C.GoString(peerID)
-	peer, err := peer.Decode(goPeerID)
+	peerObj, err := peer.Decode(goPeerID)
 	if err != nil {
-		return C.CString("{}")
+		return allocString("{}")
 	}
 
-	profile := globalController.GetPeerProfile(peer)
+	profile := globalController.GetPeerProfile(peerObj)
 	profileData := map[string]interface{}{
 		"nickname":      profile.Nickname,
 		"discriminator": profile.Discriminator,
@@ -266,5 +302,53 @@ func GetPeerProfile(peerID *C.char) *C.char {
 	}
 
 	jsonData, _ := json.Marshal(profileData)
-	return C.CString(string(jsonData))
+	return allocString(string(jsonData))
+}
+
+//export SetLogLevel
+func SetLogLevel(level C.int) C.int {
+	switch level {
+	case 0: // SILENT
+		InitGlobalLogger(LogLevelSilent, LogOutputNone, "")
+	case 1: // ERROR
+		InitGlobalLogger(LogLevelError, LogOutputConsole, "")
+	case 2: // WARN
+		InitGlobalLogger(LogLevelWarn, LogOutputConsole, "")
+	case 3: // INFO
+		InitGlobalLogger(LogLevelInfo, LogOutputConsole, "")
+	case 4: // DEBUG
+		InitGlobalLogger(LogLevelDebug, LogOutputConsole, "")
+	default:
+		return C.int(1) // Ошибка
+	}
+	return C.int(0) // Успех
+}
+
+//export SetLogOutput
+func SetLogOutput(output C.int, logDir *C.char) C.int {
+	var logDirStr string
+	if logDir != nil {
+		logDirStr = C.GoString(logDir)
+	}
+
+	var outputType LogOutput
+	switch output {
+	case 0: // NONE
+		outputType = LogOutputNone
+	case 1: // CONSOLE
+		outputType = LogOutputConsole
+	case 2: // FILE
+		outputType = LogOutputFile
+	case 3: // BOTH
+		outputType = LogOutputBoth
+	default:
+		return C.int(1) // Ошибка
+	}
+
+	err := InitGlobalLogger(LogLevelInfo, outputType, logDirStr)
+	if err != nil {
+		return C.int(1) // Ошибка
+	}
+
+	return C.int(0) // Успех
 }

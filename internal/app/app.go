@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -58,14 +57,14 @@ func (app *App) Run() error {
 	// Запускаем TUI в отдельной горутине
 	go func() {
 		if err := app.tui.Start(); err != nil {
-			log.Printf("Ошибка TUI: %v", err)
+			core.Error("Ошибка TUI: %v", err)
 			app.cancel()
 		}
 	}()
 
 	// Ждем сигнала завершения
 	<-sigChan
-	log.Println("\n🛑 Получен сигнал завершения, останавливаем приложение...")
+	core.Info("\n🛑 Получен сигнал завершения, останавливаем приложение...")
 
 	// Graceful shutdown
 	return app.Shutdown()
@@ -75,12 +74,12 @@ func (app *App) Run() error {
 func (app *App) Shutdown() error {
 	// Останавливаем Core контроллер
 	if err := app.coreController.Stop(); err != nil {
-		log.Printf("⚠️ Ошибка остановки Core контроллера: %v", err)
+		core.Warn("⚠️ Ошибка остановки Core контроллера: %v", err)
 	}
 
 	// Отменяем контекст
 	app.cancel()
 
-	log.Println("👋 Приложение остановлено")
+	core.Info("👋 Приложение остановлено")
 	return nil
 }

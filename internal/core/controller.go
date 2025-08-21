@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -67,6 +66,9 @@ type CoreController struct {
 
 	// Статус работы
 	running bool
+
+	// Кэшированный профиль пользователя
+	userProfile *UserProfile
 }
 
 // NewCoreController создает новый Core контроллер
@@ -90,11 +92,19 @@ func NewCoreController(ctx context.Context) (*CoreController, error) {
 		return nil, fmt.Errorf("не удалось создать DiscoveryManager: %w", err)
 	}
 
+	// Загружаем профиль пользователя
+	userProfile, err := node.persistence.LoadProfile()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("не удалось загрузить профиль: %w", err)
+	}
+
 	controller := &CoreController{
-		node:      node,
-		discovery: discovery,
-		ctx:       ctx,
-		cancel:    cancel,
+		node:        node,
+		discovery:   discovery,
+		ctx:         ctx,
+		cancel:      cancel,
+		userProfile: userProfile,
 	}
 
 	return controller, nil
@@ -120,7 +130,7 @@ func (c *CoreController) Start() error {
 	}
 
 	c.running = true
-	log.Println("🚀 Core контроллер запущен")
+	Info("🚀 Core контроллер запущен")
 
 	return nil
 }
@@ -136,19 +146,19 @@ func (c *CoreController) Stop() error {
 
 	// Останавливаем Discovery
 	if err := c.discovery.Stop(); err != nil {
-		log.Printf("⚠️ Ошибка остановки Discovery: %v", err)
+		Warn("⚠️ Ошибка остановки Discovery: %v", err)
 	}
 
 	// Останавливаем Node
 	if err := c.node.Stop(); err != nil {
-		log.Printf("⚠️ Ошибка остановки Node: %v", err)
+		Warn("⚠️ Ошибка остановки Discovery: %v", err)
 	}
 
 	// Отменяем контекст
 	c.cancel()
 
 	c.running = false
-	log.Println("🛑 Core контроллер остановлен")
+	Info("🛑 Core контроллер остановлен")
 
 	return nil
 }
@@ -212,6 +222,9 @@ func (c *CoreController) IsConnected(peerID peer.ID) bool {
 
 // GetMyProfile возвращает профиль текущего узла
 func (c *CoreController) GetMyProfile() *ProfileInfo {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
 	peerID := c.GetMyID()
 
 	// Генерируем discriminator из последних 6 символов PeerID
@@ -220,10 +233,20 @@ func (c *CoreController) GetMyProfile() *ProfileInfo {
 		discriminator = "#" + peerID[len(peerID)-6:]
 	}
 
+	// Используем сохраненный профиль
+	nickname := "Anonymous"
+	displayName := "Anonymous" + discriminator
+	if c.userProfile != nil {
+		nickname = c.userProfile.Nickname
+		if nickname != "" && nickname != "Anonymous" {
+			displayName = nickname + discriminator
+		}
+	}
+
 	return &ProfileInfo{
-		Nickname:      "Anonymous", // По умолчанию
+		Nickname:      nickname,
 		Discriminator: discriminator,
-		DisplayName:   "Anonymous" + discriminator,
+		DisplayName:   displayName,
 		PeerID:        peerID,
 		LastSeen:      time.Now(),
 		IsOnline:      true,
@@ -232,9 +255,30 @@ func (c *CoreController) GetMyProfile() *ProfileInfo {
 
 // UpdateMyProfile обновляет профиль текущего узла
 func (c *CoreController) UpdateMyProfile(nickname string) error {
-	// TODO: Реализовать сохранение профиля в persistence
-	// Пока просто логируем
-	log.Printf("📝 Обновление профиля: %s", nickname)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Обновляем кэшированный профиль
+	if c.userProfile == nil {
+		c.userProfile = &UserProfile{
+			Nickname:    nickname,
+			DisplayName: nickname,
+			CreatedAt:   time.Now(),
+			UpdatedAt:   time.Now(),
+		}
+	} else {
+		c.userProfile.Nickname = nickname
+		c.userProfile.DisplayName = nickname
+		c.userProfile.UpdatedAt = time.Now()
+	}
+
+	// Сохраняем в файл
+	if err := c.node.persistence.SaveProfile(c.userProfile); err != nil {
+		Error("❌ Ошибка сохранения профиля: %v", err)
+		return fmt.Errorf("не удалось сохранить профиль: %w", err)
+	}
+
+	Info("📝 Профиль обновлен: %s", nickname)
 	return nil
 }
 
@@ -262,6 +306,6 @@ func (c *CoreController) GetPeerProfile(peerID peer.ID) *ProfileInfo {
 func (c *CoreController) SendProfileToPeer(peerID peer.ID) error {
 	// TODO: Реализовать отправку ProfileInfo через Protobuf
 	// Пока просто логируем
-	log.Printf("📤 Отправка профиля к %s", peerID.ShortString())
+	Info("📤 Отправка профиля к %s", peerID.ShortString())
 	return nil
 }

@@ -30,6 +30,10 @@ extern char* GetMyProfile();
 extern int UpdateMyProfile(char* nickname);
 extern char* GetPeerProfile(char* peer_id);
 
+// Функции для настройки логирования
+extern int SetLogLevel(int level);
+extern int SetLogOutput(int output, char* log_dir);
+
 // Функции для управления памятью
 extern void FreeString(char* str);
 
