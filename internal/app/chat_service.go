@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -71,7 +70,7 @@ func (cs *ChatService) Start() error {
 	}
 
 	cs.isRunning = true
-	log.Println("🚀 ChatService запущен")
+	core.Info("🚀 ChatService запущен")
 
 	// Запускаем горутину для обработки входящих сообщений
 	go cs.handleIncomingMessages()
@@ -98,7 +97,7 @@ func (cs *ChatService) Stop() error {
 	close(cs.messagesChan)
 	close(cs.peersChan)
 
-	log.Println("🛑 ChatService остановлен")
+	core.Info("🛑 ChatService остановлен")
 	return nil
 }
 
@@ -120,12 +119,12 @@ func (cs *ChatService) handleIncomingMessages() {
 
 // processIncomingMessage обрабатывает одно входящее сообщение
 func (cs *ChatService) processIncomingMessage(rawMsg core.RawMessage) {
-	log.Printf("📥 Получено сообщение от %s", rawMsg.SenderID.ShortString())
+	core.Info("📥 Получено сообщение от %s", rawMsg.SenderID.ShortString())
 
 	// Декодируем Protobuf сообщение
 	envelope := &protocol.Envelope{}
 	if err := proto.Unmarshal(rawMsg.Data, envelope); err != nil {
-		log.Printf("❌ Ошибка декодирования сообщения: %v", err)
+		core.Error("❌ Ошибка декодирования сообщения: %v", err)
 		return
 	}
 
@@ -139,14 +138,14 @@ func (cs *ChatService) processIncomingMessage(rawMsg core.RawMessage) {
 		// Обрабатываем обычное сообщение
 		cs.handleContentMessage(envelope, payload.Content, rawMsg.SenderID)
 	default:
-		log.Printf("⚠️ Неизвестный тип сообщения от %s", rawMsg.SenderID.ShortString())
+		core.Warn("⚠️ Неизвестный тип сообщения от %s", rawMsg.SenderID.ShortString())
 		return
 	}
 }
 
 // handleProfileInfo обрабатывает информацию о профиле
 func (cs *ChatService) handleProfileInfo(senderID peer.ID, profileInfo *protocol.ProfileInfo) {
-	log.Printf("👤 Получен профиль от %s: %s%s", senderID.ShortString(), profileInfo.Nickname, profileInfo.Discriminator)
+	core.Info("👤 Получен профиль от %s: %s%s", senderID.ShortString(), profileInfo.Nickname, profileInfo.Discriminator)
 
 	// TODO: Сохранить профиль в базу данных
 	// TODO: Обновить UI с новой информацией о пире
@@ -159,7 +158,7 @@ func (cs *ChatService) handleProfileInfo(senderID peer.ID, profileInfo *protocol
 func (cs *ChatService) handleContentMessage(envelope *protocol.Envelope, content *protocol.Content, senderID peer.ID) {
 	// Проверяем тип контента
 	if content.GetText() == nil {
-		log.Printf("⚠️ Получено сообщение без текста от %s", senderID.ShortString())
+		core.Warn("⚠️ Получено сообщение без текста от %s", senderID.ShortString())
 		return
 	}
 
@@ -179,15 +178,15 @@ func (cs *ChatService) handleContentMessage(envelope *protocol.Envelope, content
 
 	// Сохраняем в базу данных
 	if err := cs.saveMessageToStorage(envelope, senderID); err != nil {
-		log.Printf("❌ Ошибка сохранения сообщения в БД: %v", err)
+		core.Error("❌ Ошибка сохранения сообщения в БД: %v", err)
 	}
 
 	// Отправляем в канал для UI
 	select {
 	case cs.messagesChan <- chatMsg:
-		log.Printf("✅ Сообщение отправлено в UI: %s", chatMsg.Text[:min(len(chatMsg.Text), 50)])
+		core.Info("✅ Сообщение отправлено в UI: %s", chatMsg.Text[:min(len(chatMsg.Text), 50)])
 	default:
-		log.Printf("⚠️ Канал UI переполнен, сообщение потеряно")
+		core.Warn("⚠️ Канал UI переполнен, сообщение потеряно")
 	}
 }
 
@@ -222,17 +221,17 @@ func (cs *ChatService) sendMyProfileToPeer(peerID peer.ID) {
 	// Сериализуем в Protobuf
 	data, err := proto.Marshal(envelope)
 	if err != nil {
-		log.Printf("❌ Ошибка сериализации профиля: %v", err)
+		core.Error("❌ Ошибка сериализации профиля: %v", err)
 		return
 	}
 
 	// Отправляем через core controller
 	if err := cs.coreController.Send(peerID, data); err != nil {
-		log.Printf("❌ Ошибка отправки профиля к %s: %v", peerID.ShortString(), err)
+		core.Error("❌ Ошибка отправки профиля к %s: %v", peerID.ShortString(), err)
 		return
 	}
 
-	log.Printf("📤 Профиль отправлен к %s", peerID.ShortString())
+	core.Info("📤 Профиль отправлен к %s", peerID.ShortString())
 }
 
 // saveMessageToStorage сохраняет сообщение в базу данных
@@ -320,9 +319,9 @@ func (cs *ChatService) Send(text string, chatType string, recipientID string) er
 	// Отправляем в канал для UI
 	select {
 	case cs.messagesChan <- chatMsg:
-		log.Printf("✅ Сообщение отправлено: %s", text[:min(len(text), 50)])
+		core.Info("✅ Сообщение отправлено: %s", text[:min(len(text), 50)])
 	default:
-		log.Printf("⚠️ Канал UI переполнен, исходящее сообщение потеряно")
+		core.Warn("⚠️ Канал UI переполнен, исходящее сообщение потеряно")
 	}
 
 	return nil
@@ -353,7 +352,7 @@ func (cs *ChatService) monitorPeers() {
 			// Проверяем новых пиров
 			for _, peerID := range currentPeers {
 				if !containsPeer(lastPeers, peerID) {
-					log.Printf("🆕 Обнаружен новый пир: %s", peerID.ShortString())
+					core.Info("🆕 Обнаружен новый пир: %s", peerID.ShortString())
 
 					// Автоматически отправляем наш профиль новому пиру
 					go cs.sendMyProfileToPeer(peerID)

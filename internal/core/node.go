@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 
 	"github.com/libp2p/go-libp2p"
@@ -23,11 +22,11 @@ func (nel *NetworkEventLogger) Listen(network.Network, multiaddr.Multiaddr)     
 func (nel *NetworkEventLogger) ListenClose(network.Network, multiaddr.Multiaddr) {}
 
 func (nel *NetworkEventLogger) Connected(net network.Network, conn network.Conn) {
-	log.Printf("🔗 EVENT: Успешное соединение с %s", conn.RemotePeer().ShortString())
+	Info("🔗 EVENT: Успешное соединение с %s", conn.RemotePeer().ShortString())
 }
 
 func (nel *NetworkEventLogger) Disconnected(net network.Network, conn network.Conn) {
-	log.Printf("🔌 EVENT: Соединение с %s разорвано", conn.RemotePeer().ShortString())
+	Info("🔌 EVENT: Соединение с %s разорвано", conn.RemotePeer().ShortString())
 }
 
 func (nel *NetworkEventLogger) OpenedStream(network.Network, network.Stream) {}
@@ -69,7 +68,7 @@ func NewNode(ctx context.Context) (*Node, error) {
 		return nil, fmt.Errorf("не удалось получить PeerID из ключа: %w", err)
 	}
 
-	log.Printf("🔑 Загружен ключ для PeerID: %s", peerID.String())
+	Info("🔑 Загружен ключ для PeerID: %s", peerID.String())
 
 	opts := []libp2p.Option{
 		libp2p.Identity(privKey),
@@ -104,7 +103,7 @@ func NewNode(ctx context.Context) (*Node, error) {
 
 // Start запускает узел
 func (n *Node) Start() error {
-	log.Println("🚀 Узел запущен")
+	Info("🚀 Узел запущен")
 	return nil
 }
 
@@ -114,7 +113,7 @@ func (n *Node) Stop() error {
 		return fmt.Errorf("ошибка остановки узла: %w", err)
 	}
 	close(n.messagesChan)
-	log.Println("🛑 Узел остановлен")
+	Info("🛑 Узел остановлен")
 	return nil
 }
 
@@ -179,7 +178,7 @@ func (n *Node) Send(peerID peer.ID, data []byte) error {
 		return fmt.Errorf("не удалось отправить данные к %s: %w", peerID.ShortString(), err)
 	}
 
-	log.Printf("📤 Отправлено %d байт к %s", len(data), peerID.ShortString())
+	Info("📤 Отправлено %d байт к %s", len(data), peerID.ShortString())
 	return nil
 }
 
@@ -187,14 +186,14 @@ func (n *Node) Send(peerID peer.ID, data []byte) error {
 func (n *Node) Broadcast(data []byte) error {
 	peers := n.GetPeers()
 	if len(peers) == 0 {
-		log.Println("⚠️ Нет подключенных пиров для broadcast")
+		Warn("⚠️ Нет подключенных пиров для broadcast")
 		return nil
 	}
 
 	var lastError error
 	for _, peerID := range peers {
 		if err := n.Send(peerID, data); err != nil {
-			log.Printf("❌ Ошибка отправки к %s: %v", peerID.ShortString(), err)
+			Error("❌ Ошибка отправки к %s: %v", peerID.ShortString(), err)
 			lastError = err
 		}
 	}
@@ -210,7 +209,7 @@ func (n *Node) Messages() <-chan RawMessage {
 // handleStream обрабатывает входящие потоки
 func (n *Node) handleStream(stream network.Stream) {
 	remotePeer := stream.Conn().RemotePeer()
-	log.Printf("📥 Получен поток от %s", remotePeer.ShortString())
+	Info("📥 Получен поток от %s", remotePeer.ShortString())
 
 	// Добавляем пира в список
 	n.AddPeer(remotePeer)
@@ -219,7 +218,7 @@ func (n *Node) handleStream(stream network.Stream) {
 	buffer := make([]byte, 1024)
 	bytesRead, err := stream.Read(buffer)
 	if err != nil {
-		log.Printf("❌ Ошибка чтения потока от %s: %v", remotePeer.ShortString(), err)
+		Error("❌ Ошибка чтения потока от %s: %v", remotePeer.ShortString(), err)
 		stream.Close()
 		return
 	}
@@ -233,9 +232,9 @@ func (n *Node) handleStream(stream network.Stream) {
 	// Отправляем в канал сообщений
 	select {
 	case n.messagesChan <- message:
-		log.Printf("📨 Сообщение от %s добавлено в очередь", remotePeer.ShortString())
+		Info("📨 Сообщение от %s добавлено в очередь", remotePeer.ShortString())
 	default:
-		log.Printf("⚠️ Канал сообщений переполнен, сообщение от %s потеряно", remotePeer.ShortString())
+		Warn("⚠️ Канал сообщений переполнен, сообщение от %s потеряно", remotePeer.ShortString())
 	}
 
 	stream.Close()
