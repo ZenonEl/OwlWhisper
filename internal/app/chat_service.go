@@ -129,15 +129,37 @@ func (cs *ChatService) processIncomingMessage(rawMsg core.RawMessage) {
 		return
 	}
 
-	// Проверяем тип контента
-	if envelope.GetContent() == nil {
-		log.Printf("⚠️ Получено сообщение без контента от %s", rawMsg.SenderID.ShortString())
+	// Проверяем тип сообщения
+	switch payload := envelope.Payload.(type) {
+	case *protocol.Envelope_ProfileInfo:
+		// Обрабатываем информацию о профиле
+		cs.handleProfileInfo(rawMsg.SenderID, payload.ProfileInfo)
+		return
+	case *protocol.Envelope_Content:
+		// Обрабатываем обычное сообщение
+		cs.handleContentMessage(envelope, payload.Content, rawMsg.SenderID)
+	default:
+		log.Printf("⚠️ Неизвестный тип сообщения от %s", rawMsg.SenderID.ShortString())
 		return
 	}
+}
 
-	content := envelope.GetContent()
+// handleProfileInfo обрабатывает информацию о профиле
+func (cs *ChatService) handleProfileInfo(senderID peer.ID, profileInfo *protocol.ProfileInfo) {
+	log.Printf("👤 Получен профиль от %s: %s%s", senderID.ShortString(), profileInfo.Nickname, profileInfo.Discriminator)
+
+	// TODO: Сохранить профиль в базу данных
+	// TODO: Обновить UI с новой информацией о пире
+
+	// Автоматически отправляем наш профиль в ответ
+	go cs.sendMyProfileToPeer(senderID)
+}
+
+// handleContentMessage обрабатывает сообщение с контентом
+func (cs *ChatService) handleContentMessage(envelope *protocol.Envelope, content *protocol.Content, senderID peer.ID) {
+	// Проверяем тип контента
 	if content.GetText() == nil {
-		log.Printf("⚠️ Получено сообщение без текста от %s", rawMsg.SenderID.ShortString())
+		log.Printf("⚠️ Получено сообщение без текста от %s", senderID.ShortString())
 		return
 	}
 
@@ -156,7 +178,7 @@ func (cs *ChatService) processIncomingMessage(rawMsg core.RawMessage) {
 	}
 
 	// Сохраняем в базу данных
-	if err := cs.saveMessageToStorage(envelope, rawMsg.SenderID); err != nil {
+	if err := cs.saveMessageToStorage(envelope, senderID); err != nil {
 		log.Printf("❌ Ошибка сохранения сообщения в БД: %v", err)
 	}
 
@@ -167,6 +189,50 @@ func (cs *ChatService) processIncomingMessage(rawMsg core.RawMessage) {
 	default:
 		log.Printf("⚠️ Канал UI переполнен, сообщение потеряно")
 	}
+}
+
+// generateMessageID создает уникальный ID для сообщения
+func generateMessageID() string {
+	return uuid.New().String()
+}
+
+// sendMyProfileToPeer отправляет наш профиль указанному пиру
+func (cs *ChatService) sendMyProfileToPeer(peerID peer.ID) {
+	// Получаем наш профиль
+	myProfile := cs.coreController.GetMyProfile()
+
+	// Создаем Protobuf сообщение с профилем
+	profileInfo := &protocol.ProfileInfo{
+		Nickname:      myProfile.Nickname,
+		Discriminator: myProfile.Discriminator,
+		DisplayName:   myProfile.DisplayName,
+		LastSeen:      time.Now().Unix(),
+		IsOnline:      true,
+	}
+
+	envelope := &protocol.Envelope{
+		MessageId:     generateMessageID(),
+		SenderId:      cs.coreController.GetMyID(),
+		TimestampUnix: time.Now().Unix(),
+		ChatType:      protocol.Envelope_PRIVATE,
+		ChatId:        peerID.String(),
+		Payload:       &protocol.Envelope_ProfileInfo{ProfileInfo: profileInfo},
+	}
+
+	// Сериализуем в Protobuf
+	data, err := proto.Marshal(envelope)
+	if err != nil {
+		log.Printf("❌ Ошибка сериализации профиля: %v", err)
+		return
+	}
+
+	// Отправляем через core controller
+	if err := cs.coreController.Send(peerID, data); err != nil {
+		log.Printf("❌ Ошибка отправки профиля к %s: %v", peerID.ShortString(), err)
+		return
+	}
+
+	log.Printf("📤 Профиль отправлен к %s", peerID.ShortString())
 }
 
 // saveMessageToStorage сохраняет сообщение в базу данных
@@ -277,13 +343,31 @@ func (cs *ChatService) monitorPeers() {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
+	var lastPeers []peer.ID
+
 	for {
 		select {
 		case <-ticker.C:
-			peers := cs.coreController.GetPeers()
+			currentPeers := cs.coreController.GetPeers()
+
+			// Проверяем новых пиров
+			for _, peerID := range currentPeers {
+				if !containsPeer(lastPeers, peerID) {
+					log.Printf("🆕 Обнаружен новый пир: %s", peerID.ShortString())
+
+					// Автоматически отправляем наш профиль новому пиру
+					go cs.sendMyProfileToPeer(peerID)
+				}
+			}
+
+			// Обновляем список пиров
+			lastPeers = make([]peer.ID, len(currentPeers))
+			copy(lastPeers, currentPeers)
+
+			// Отправляем обновленный список в UI
 			select {
-			case cs.peersChan <- peers:
-				// Пиры отправлены в канал
+			case cs.peersChan <- currentPeers:
+				// Список пиров отправлен в UI
 			default:
 				// Канал переполнен, пропускаем
 			}
@@ -292,6 +376,16 @@ func (cs *ChatService) monitorPeers() {
 			return
 		}
 	}
+}
+
+// containsPeer проверяет, содержится ли пир в списке
+func containsPeer(peers []peer.ID, target peer.ID) bool {
+	for _, p := range peers {
+		if p == target {
+			return true
+		}
+	}
+	return false
 }
 
 // getPeerName возвращает имя пира (никнейм или PeerID)
