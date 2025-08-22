@@ -54,36 +54,110 @@ if result == 0:
     owlwhisper.StopOwlWhisper()
 ```
 
+### 2.5. Создание нового профиля
+
+```python
+import base64
+import json
+
+# Генерируем новую пару ключей
+key_data = owlwhisper.GenerateNewKeyPair()
+if key_data:
+    # Декодируем данные
+    json_str = ctypes.string_at(key_data).decode()
+    key_info = json.loads(json_str)
+    
+    print(f"🔑 Новый профиль создан:")
+    print(f"   Peer ID: {key_info['peer_id']}")
+    print(f"   Тип ключа: {key_info['key_type']}")
+    
+    # Получаем приватный ключ
+    private_key = base64.b64decode(key_info['private_key'])
+    
+    # Освобождаем память
+    owlwhisper.FreeString(key_data)
+    
+    # Теперь можно зашифровать и сохранить ключ
+    # или сразу запустить с ним
+    result = owlwhisper.StartOwlWhisperWithKey(private_key, len(private_key))
+else:
+    print("❌ Ошибка генерации ключей")
+```
+
 ### 3. Мульти-профильная система
 
 ```python
 import ctypes
 import os
+import base64
+import json
 
 # Настройка типов для функций
 owlwhisper.StartOwlWhisperWithKey.argtypes = [ctypes.c_char_p, ctypes.c_int]
 owlwhisper.StartOwlWhisperWithKey.restype = ctypes.c_int
+owlwhisper.GenerateNewKeyPair.restype = ctypes.c_char_p
 
-# Загружаем зашифрованный ключ из профиля
-profile_path = "~/.config/owlwhisper/profiles/work_profile/identity.key.encrypted"
-with open(os.path.expanduser(profile_path), "rb") as f:
-    encrypted_key = f.read()
-
-# Расшифровываем ключ (это делает Python клиент)
-decrypted_key = decrypt_key(encrypted_key, user_password)
-
-# Запускаем с профилем
-result = owlwhisper.StartOwlWhisperWithKey(decrypted_key, len(decrypted_key))
-if result == 0:
-    print("✅ Owl Whisper запущен с рабочим профилем")
+# Вариант 1: Создание нового профиля
+def create_new_profile(nickname):
+    # Генерируем новую пару ключей
+    key_data = owlwhisper.GenerateNewKeyPair()
+    if not key_data:
+        print("❌ Ошибка генерации ключей")
+        return None
     
-    # Работаем с профилем...
-    profile = owlwhisper.GetMyProfile()
-    print(f"Профиль: {ctypes.string_at(profile).decode()}")
-    owlwhisper.FreeString(profile)
+    # Декодируем данные ключа
+    json_str = ctypes.string_at(key_data).decode()
+    key_info = json.loads(json_str)
     
-    # Останавливаем
-    owlwhisper.StopOwlWhisper()
+    print(f"✅ Создан новый профиль:")
+    print(f"   Peer ID: {key_info['peer_id']}")
+    print(f"   Никнейм: {nickname}")
+    
+    # Получаем приватный ключ
+    private_key = base64.b64decode(key_info['private_key'])
+    
+    # Освобождаем память
+    owlwhisper.FreeString(key_data)
+    
+    # Теперь можно зашифровать и сохранить ключ
+    return private_key, key_info['peer_id']
+
+# Вариант 2: Использование существующего профиля
+def load_existing_profile(profile_path):
+    # Загружаем зашифрованный ключ из профиля
+    with open(os.path.expanduser(profile_path), "rb") as f:
+        encrypted_key = f.read()
+
+    # Расшифровываем ключ (это делает Python клиент)
+    decrypted_key = decrypt_key(encrypted_key, user_password)
+
+    # Запускаем с профилем
+    result = owlwhisper.StartOwlWhisperWithKey(decrypted_key, len(decrypted_key))
+    if result == 0:
+        print("✅ Owl Whisper запущен с профилем")
+        
+        # Работаем с профилем...
+        profile = owlwhisper.GetMyProfile()
+        print(f"Профиль: {ctypes.string_at(profile).decode()}")
+        owlwhisper.FreeString(profile)
+        
+        return True
+    else:
+        print("❌ Ошибка запуска профиля")
+        return False
+
+# Пример использования
+if __name__ == "__main__":
+    # Создаем новый профиль
+    new_key, new_peer_id = create_new_profile("Рабочий")
+    if new_key:
+        # Запускаем с новым ключом
+        result = owlwhisper.StartOwlWhisperWithKey(new_key, len(new_key))
+        if result == 0:
+            print("✅ Новый профиль запущен!")
+            
+            # Останавливаем
+            owlwhisper.StopOwlWhisper()
 ```
 
 ---
@@ -103,6 +177,7 @@ if result == 0:
 
 | Задача | Кто отвечает? | Детали |
 |--------|---------------|---------|
+| **Генерация ключей** | **Core (Go)** | `GenerateNewKeyPair()` создает Ed25519 ключи в libp2p формате |
 | **Хранение профилей** | **Клиент (Python/Flet)** | Управляет директориями `~/.config/owlwhisper/profiles/<uuid>/` |
 | **Шифрование ключей** | **Клиент (Python/Flet)** | Использует `cryptography` для AES-256-GCM + Argon2 |
 | **Запрос паролей** | **Клиент (Python/Flet)** | UI экран входа/разблокировки |
@@ -125,6 +200,16 @@ if result == 0:
         ├── profile.db
         └── settings.json
 ```
+
+### 🔑 Формат ключей
+
+**Важно:** Go библиотека ожидает ключи в **libp2p формате**, а не в Protobuf или сырых байтах!
+
+- **✅ Правильно:** Используйте `GenerateNewKeyPair()` для создания ключей
+- **❌ Неправильно:** `secrets.token_bytes(32)` или Protobuf сериализация
+- **🔧 Формат:** Ed25519 ключи, сериализованные через `crypto.MarshalPrivateKey()`
+- **📏 Размер:** Обычно 68 байт для Ed25519 ключей
+- **🆔 PeerID:** Автоматически генерируется из публичного ключа
 
 ---
 
@@ -175,6 +260,47 @@ else:
 result = owlwhisper.StopOwlWhisper()
 if result == 0:
     print("✅ Остановлен")
+```
+
+#### `GenerateNewKeyPair() -> str*`
+Генерирует новую пару libp2p ключей Ed25519.
+- **Возвращает:** Base64-закодированную JSON-строку с информацией о ключе
+- **⚠️ Важно:** Не забудьте вызвать `FreeString()` после использования
+- **Структура возвращаемых данных:**
+```json
+{
+  "private_key": "base64_encoded_key_bytes",
+  "peer_id": "12D3KooW...",
+  "key_type": "Ed25519",
+  "key_length": 68
+}
+```
+- **Пример:**
+```python
+import base64
+import json
+
+# Генерируем новую пару ключей
+key_data = owlwhisper.GenerateNewKeyPair()
+if key_data:
+    # Декодируем base64
+    json_str = ctypes.string_at(key_data).decode()
+    key_info = json.loads(json_str)
+    
+    print(f"Новый Peer ID: {key_info['peer_id']}")
+    print(f"Тип ключа: {key_info['key_type']}")
+    print(f"Длина ключа: {key_info['key_length']} байт")
+    
+    # Получаем приватный ключ для использования
+    private_key = base64.b64decode(key_info['private_key'])
+    
+    # Освобождаем память
+    owlwhisper.FreeString(key_data)
+    
+    # Теперь можно использовать ключ для запуска
+    result = owlwhisper.StartOwlWhisperWithKey(private_key, len(private_key))
+else:
+    print("❌ Ошибка генерации ключей")
 ```
 
 ### 💬 Отправка сообщений
@@ -312,6 +438,49 @@ if result == 0:
     print("✅ Подключение установлено")
 ```
 
+### 🔑 Генерация ключей
+
+#### `GenerateNewKeyPair() -> str*`
+Генерирует новую пару libp2p ключей Ed25519.
+- **Возвращает:** Base64-закодированную JSON-строку с информацией о ключе
+- **⚠️ Важно:** Не забудьте вызвать `FreeString()` после использования
+- **Структура возвращаемых данных:**
+```json
+{
+  "private_key": "base64_encoded_key_bytes",
+  "peer_id": "12D3KooW...",
+  "key_type": "Ed25519",
+  "key_length": 68
+}
+```
+- **Пример:**
+```python
+import base64
+import json
+
+# Генерируем новую пару ключей
+key_data = owlwhisper.GenerateNewKeyPair()
+if key_data:
+    # Декодируем base64
+    json_str = ctypes.string_at(key_data).decode()
+    key_info = json.loads(json_str)
+    
+    print(f"Новый Peer ID: {key_info['peer_id']}")
+    print(f"Тип ключа: {key_info['key_type']}")
+    print(f"Длина ключа: {key_info['key_length']} байт")
+    
+    # Получаем приватный ключ для использования
+    private_key = base64.b64decode(key_info['private_key'])
+    
+    # Освобождаем память
+    owlwhisper.FreeString(key_data)
+    
+    # Теперь можно использовать ключ для запуска
+    result = owlwhisper.StartOwlWhisperWithKey(private_key, len(private_key))
+else:
+    print("❌ Ошибка генерации ключей")
+```
+
 ### 📜 История сообщений
 
 #### `GetChatHistory(peer_id: str) -> str*`
@@ -444,7 +613,9 @@ const ref = require('ref-napi');
 // Загружаем библиотеку
 const owlwhisper = ffi.Library('./dist/libowlwhisper', {
     'StartOwlWhisper': ['int', []],
+    'StartOwlWhisperWithKey': ['int', ['string', 'int']],
     'StopOwlWhisper': ['int', []],
+    'GenerateNewKeyPair': ['string', []],
     'SendMessage': ['int', ['string']],
     'GetMyPeerID': ['string', []],
     'GetPeers': ['string', []],
@@ -462,6 +633,26 @@ if (result === 0) {
     owlwhisper.FreeString(peerId);
     
     owlwhisper.StopOwlWhisper();
+}
+
+// Пример создания нового профиля
+console.log('🔑 Создаем новый профиль...');
+const keyData = owlwhisper.GenerateNewKeyPair();
+if (keyData) {
+    const keyInfo = JSON.parse(Buffer.from(keyData, 'base64').toString());
+    console.log('Новый Peer ID:', keyInfo.peer_id);
+    console.log('Тип ключа:', keyInfo.key_type);
+    
+    // Освобождаем память
+    owlwhisper.FreeString(keyData);
+    
+    // Теперь можно использовать ключ
+    const privateKey = Buffer.from(keyInfo.private_key, 'base64');
+    const startResult = owlwhisper.StartOwlWhisperWithKey(privateKey, privateKey.length);
+    if (startResult === 0) {
+        console.log('✅ Новый профиль запущен!');
+        owlwhisper.StopOwlWhisper();
+    }
 }
 ```
 
@@ -547,6 +738,12 @@ export DYLD_LIBRARY_PATH=./dist:$DYLD_LIBRARY_PATH  # macOS
 - Убедитесь, что прошло достаточно времени для обнаружения пиров (обычно 2-5 секунд)
 - Проверьте, что ваш узел успешно подключился к bootstrap узлам
 
+### Проблема: "proto: cannot parse invalid wire-format data"
+- **РЕШЕНИЕ:** Используйте `GenerateNewKeyPair()` для создания ключей вместо `secrets.token_bytes(32)`
+- **Причина:** Go библиотека ожидает ключи в libp2p формате, а не случайные байты
+- **Формат:** Ed25519 ключи, сериализованные через `crypto.MarshalPrivateKey()`
+- **Размер:** Обычно 68 байт для Ed25519 ключей
+
 ---
 
 ## 📁 Структура файлов
@@ -585,4 +782,4 @@ internal/core/
 3. Проверьте, что библиотека запущена перед вызовом функций
 4. Убедитесь, что прошло достаточно времени для обнаружения пиров
 
-**Последнее обновление:** 21 августа 2025 (добавлены функции логирования)
+**Последнее обновление:** 22 августа 2025 (добавлена функция генерации ключей `GenerateNewKeyPair`)

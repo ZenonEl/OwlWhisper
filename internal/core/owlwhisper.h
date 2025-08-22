@@ -10,6 +10,9 @@ int StartOwlWhisper();
 int StartOwlWhisperWithKey(char* keyBytes, int keyLength);
 int StopOwlWhisper();
 
+// Генерация ключей
+char* GenerateNewKeyPair();
+
 // Отправка сообщений
 int SendMessage(char* text);
 int SendMessageToPeer(char* peerID, char* text);
