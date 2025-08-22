@@ -8,11 +8,14 @@ package core
 import "C"
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"sync"
 	"time"
 	"unsafe"
 
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
@@ -101,8 +104,57 @@ func StartOwlWhisperWithKey(keyBytes *C.char, keyLength C.int) C.int {
 
 	// Сохраняем глобальный экземпляр
 	globalController = controller
+	return 0
+	return 0
+}
 
-	return C.int(0) // Успех
+//export GenerateNewKeyPair
+func GenerateNewKeyPair() *C.char {
+	// Инициализируем логгер по умолчанию (только в консоль)
+	InitGlobalLogger(LogLevelInfo, LogOutputConsole, "")
+
+	// Генерируем новую пару ключей Ed25519
+	privKey, _, err := crypto.GenerateKeyPairWithReader(crypto.Ed25519, 2048, rand.Reader)
+	if err != nil {
+		Error("❌ Ошибка генерации ключей: %v", err)
+		return nil
+	}
+
+	// Сериализуем приватный ключ в libp2p формат
+	keyBytes, err := crypto.MarshalPrivateKey(privKey)
+	if err != nil {
+		Error("❌ Ошибка сериализации ключа: %v", err)
+		return nil
+	}
+
+	// Получаем PeerID из ключа
+	peerID, err := peer.IDFromPrivateKey(privKey)
+	if err != nil {
+		Error("❌ Ошибка получения PeerID: %v", err)
+		return nil
+	}
+
+	// Создаем JSON с ключом и PeerID
+	keyInfo := map[string]interface{}{
+		"private_key": keyBytes,
+		"peer_id":     peerID.String(),
+		"key_type":    "Ed25519",
+		"key_length":  len(keyBytes),
+	}
+
+	// Сериализуем в JSON
+	jsonData, err := json.Marshal(keyInfo)
+	if err != nil {
+		Error("❌ Ошибка сериализации JSON: %v", err)
+		return nil
+	}
+
+	// Конвертируем в base64 для безопасной передачи
+	encodedData := base64.StdEncoding.EncodeToString(jsonData)
+	
+	Info("🔑 Сгенерирована новая пара ключей для PeerID: %s", peerID.String())
+	
+	return allocString(encodedData)
 }
 
 //export StopOwlWhisper
