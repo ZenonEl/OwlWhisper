@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"unsafe"
 
@@ -592,4 +593,223 @@ func SetLogOutput(output C.int, logDir *C.char) C.int {
 	}
 
 	return C.int(0) // Успех
+}
+
+//export SavePeerToCache
+func SavePeerToCache(peerIDStr *C.char, addresses *C.char, healthy C.int) C.int {
+	if globalController == nil {
+		return C.int(-1)
+	}
+
+	peerID, err := peer.Decode(C.GoString(peerIDStr))
+	if err != nil {
+		return C.int(-1)
+	}
+
+	// Парсим адреса из JSON строки
+	var addrList []string
+	if err := json.Unmarshal([]byte(C.GoString(addresses)), &addrList); err != nil {
+		return C.int(-1)
+	}
+
+	isHealthy := healthy != 0
+
+	if err := globalController.SavePeerToCache(peerID, addrList, isHealthy); err != nil {
+		return C.int(-1)
+	}
+
+	return C.int(0)
+}
+
+//export LoadPeerFromCache
+func LoadPeerFromCache(peerIDStr *C.char) *C.char {
+	if globalController == nil {
+		return nil
+	}
+
+	peerID, err := peer.Decode(C.GoString(peerIDStr))
+	if err != nil {
+		return nil
+	}
+
+	cachedPeer, err := globalController.LoadPeerFromCache(peerID)
+	if err != nil {
+		return nil
+	}
+
+	// Сериализуем в JSON
+	data, err := json.Marshal(cachedPeer)
+	if err != nil {
+		return nil
+	}
+
+	return allocString(string(data))
+}
+
+//export GetAllCachedPeers
+func GetAllCachedPeers() *C.char {
+	if globalController == nil {
+		return nil
+	}
+
+	cachedPeers, err := globalController.GetAllCachedPeers()
+	if err != nil {
+		return nil
+	}
+
+	// Сериализуем в JSON
+	data, err := json.Marshal(cachedPeers)
+	if err != nil {
+		return nil
+	}
+
+	return allocString(string(data))
+}
+
+//export GetHealthyCachedPeers
+func GetHealthyCachedPeers() *C.char {
+	if globalController == nil {
+		return nil
+	}
+
+	healthyPeers, err := globalController.GetHealthyCachedPeers()
+	if err != nil {
+		return nil
+	}
+
+	// Сериализуем в JSON
+	data, err := json.Marshal(healthyPeers)
+	if err != nil {
+		return nil
+	}
+
+	return allocString(string(data))
+}
+
+//export RemovePeerFromCache
+func RemovePeerFromCache(peerIDStr *C.char) C.int {
+	if globalController == nil {
+		return C.int(-1)
+	}
+
+	peerID, err := peer.Decode(C.GoString(peerIDStr))
+	if err != nil {
+		return C.int(-1)
+	}
+
+	if err := globalController.RemovePeerFromCache(peerID); err != nil {
+		return C.int(-1)
+	}
+
+	return C.int(0)
+}
+
+//export ClearPeerCache
+func ClearPeerCache() C.int {
+	if globalController == nil {
+		return C.int(-1)
+	}
+
+	if err := globalController.ClearPeerCache(); err != nil {
+		return C.int(-1)
+	}
+
+	return C.int(0)
+}
+
+//export SaveDHTRoutingTable
+func SaveDHTRoutingTable() C.int {
+	if globalController == nil {
+		return C.int(-1)
+	}
+
+	if err := globalController.LoadDHTRoutingTableFromCache(); err != nil {
+		return C.int(-1)
+	}
+
+	return C.int(0)
+}
+
+//export LoadDHTRoutingTableFromCache
+func LoadDHTRoutingTableFromCache() C.int {
+	if globalController == nil {
+		return C.int(-1)
+	}
+
+	if err := globalController.LoadDHTRoutingTableFromCache(); err != nil {
+		return C.int(-1)
+	}
+
+	return C.int(0)
+}
+
+//export GetRoutingTableStats
+func GetRoutingTableStats() *C.char {
+	if globalController == nil {
+		return nil
+	}
+
+	stats := globalController.GetRoutingTableStats()
+
+	// Сериализуем в JSON
+	data, err := json.Marshal(stats)
+	if err != nil {
+		return nil
+	}
+
+	return allocString(string(data))
+}
+
+//export FindProvidersForContent
+func FindProvidersForContent(contentID *C.char) *C.char {
+	if contentID == nil {
+		return C.CString("")
+	}
+
+	contentIDStr := C.GoString(contentID)
+	if contentIDStr == "" {
+		return C.CString("")
+	}
+
+	providers, err := globalController.FindProvidersForContent(contentIDStr)
+	if err != nil {
+		return C.CString(fmt.Sprintf("ERROR: %v", err))
+	}
+
+	// Преобразуем []peer.AddrInfo в JSON строку
+	var result []map[string]interface{}
+	for _, provider := range providers {
+		providerInfo := map[string]interface{}{
+			"id":     provider.ID.String(),
+			"addrs":  provider.Addrs,
+			"health": "healthy",
+		}
+		result = append(result, providerInfo)
+	}
+
+	jsonData, err := json.Marshal(result)
+	if err != nil {
+		return C.CString(fmt.Sprintf("ERROR: не удалось сериализовать результат: %v", err))
+	}
+
+	return C.CString(string(jsonData))
+}
+
+//export ProvideContent
+func ProvideContent(contentID *C.char) C.int {
+	if contentID == nil {
+		return C.int(0)
+	}
+
+	contentIDStr := C.GoString(contentID)
+	if contentIDStr == "" {
+		return C.int(0)
+	}
+
+	err := globalController.ProvideContent(contentIDStr)
+	if err != nil {
+		return C.int(0)
+	}
+
+	return C.int(1)
 }

@@ -144,6 +144,142 @@ func (dm *DiscoveryManager) GetDHT() *dht.IpfsDHT {
 	return dm.dht
 }
 
+// SaveDHTRoutingTable сохраняет DHT routing table в кэш
+func (dm *DiscoveryManager) SaveDHTRoutingTable(persistence *PersistenceManager) error {
+	if dm.dht == nil {
+		return fmt.Errorf("DHT недоступен")
+	}
+
+	// Получаем все пиры из DHT
+	peers := dm.dht.RoutingTable().ListPeers()
+
+	Info("💾 Сохраняем DHT routing table: %d пиров", len(peers))
+
+	for _, peerID := range peers {
+		// Получаем адреса пира
+		addrs := dm.host.Peerstore().Addrs(peerID)
+		var addrStrings []string
+		for _, addr := range addrs {
+			addrStrings = append(addrStrings, addr.String())
+		}
+
+		// Определяем, является ли пир "здоровым" (есть адреса)
+		healthy := len(addrStrings) > 0
+
+		// Сохраняем в кэш
+		if err := persistence.SavePeerToCache(peerID, addrStrings, healthy); err != nil {
+			Warn("⚠️ Не удалось сохранить пира %s в кэш: %v", peerID.ShortString(), err)
+		}
+	}
+
+	Info("✅ DHT routing table сохранена в кэш")
+	return nil
+}
+
+// LoadDHTRoutingTableFromCache загружает DHT routing table из кэша
+func (dm *DiscoveryManager) LoadDHTRoutingTableFromCache(persistence *PersistenceManager) error {
+	if dm.dht == nil {
+		return fmt.Errorf("DHT недоступен")
+	}
+
+	// Загружаем кэшированных пиров
+	cachedPeers, err := persistence.GetHealthyCachedPeers()
+	if err != nil {
+		return fmt.Errorf("не удалось загрузить кэшированных пиров: %w", err)
+	}
+
+	if len(cachedPeers) == 0 {
+		Info("💾 Кэш пиров пуст, используем только bootstrap узлы")
+		return nil
+	}
+
+	Info("💾 Загружаем DHT routing table из кэша: %d пиров", len(cachedPeers))
+
+	// Добавляем кэшированных пиров в DHT routing table
+	for _, cachedPeer := range cachedPeers {
+		peerID, err := peer.Decode(cachedPeer.PeerID)
+		if err != nil {
+			Warn("⚠️ Неверный Peer ID в кэше: %s", cachedPeer.PeerID)
+			continue
+		}
+
+		// Пытаемся подключиться к кэшированному пиру
+		if err := dm.host.Connect(dm.ctx, peer.AddrInfo{ID: peerID}); err != nil {
+			Warn("⚠️ Не удалось подключиться к кэшированному пиру %s: %v", peerID.ShortString(), err)
+		} else {
+			Info("✅ Подключились к кэшированному пиру %s", peerID.ShortString())
+		}
+	}
+
+	Info("✅ DHT routing table загружена из кэша")
+	return nil
+}
+
+// GetRoutingTableStats возвращает статистику DHT routing table
+func (dm *DiscoveryManager) GetRoutingTableStats() map[string]interface{} {
+	if dm.dht == nil {
+		return map[string]interface{}{
+			"status": "dht_unavailable",
+		}
+	}
+
+	rt := dm.dht.RoutingTable()
+	peers := rt.ListPeers()
+
+	stats := map[string]interface{}{
+		"total_peers": len(peers),
+		"size":        rt.Size(),
+	}
+
+	return stats
+}
+
+// fallbackToCachedPeers пытается подключиться к кэшированным пирам при недоступности bootstrap
+func (dm *DiscoveryManager) fallbackToCachedPeers() error {
+	// Создаем временный PersistenceManager для доступа к кэшу
+	persistence, err := NewPersistenceManager()
+	if err != nil {
+		return fmt.Errorf("не удалось создать PersistenceManager: %w", err)
+	}
+
+	// Загружаем здоровых кэшированных пиров
+	cachedPeers, err := persistence.GetHealthyCachedPeers()
+	if err != nil {
+		return fmt.Errorf("не удалось загрузить кэшированных пиров: %w", err)
+	}
+
+	if len(cachedPeers) == 0 {
+		return fmt.Errorf("кэш пиров пуст")
+	}
+
+	Info("🔄 Пытаемся подключиться к %d кэшированным пирам...", len(cachedPeers))
+
+	// Пытаемся подключиться к кэшированным пирам
+	connectedCount := 0
+	for _, cachedPeer := range cachedPeers {
+		peerID, err := peer.Decode(cachedPeer.PeerID)
+		if err != nil {
+			Warn("⚠️ Неверный Peer ID в кэше: %s", cachedPeer.PeerID)
+			continue
+		}
+
+		// Пытаемся подключиться
+		if err := dm.host.Connect(dm.ctx, peer.AddrInfo{ID: peerID}); err != nil {
+			Warn("⚠️ Не удалось подключиться к кэшированному пиру %s: %v", peerID.ShortString(), err)
+		} else {
+			Info("✅ Подключились к кэшированному пиру %s", peerID.ShortString())
+			connectedCount++
+		}
+	}
+
+	if connectedCount > 0 {
+		Info("✅ Успешно подключились к %d кэшированным пирам", connectedCount)
+		return nil
+	}
+
+	return fmt.Errorf("не удалось подключиться ни к одному кэшированному пиру")
+}
+
 // startMDNSDiscovery запускает mDNS discovery
 func (dm *DiscoveryManager) startMDNSDiscovery() {
 	Info("🏠 Поиск локальных пиров через mDNS...")
@@ -160,6 +296,8 @@ func (dm *DiscoveryManager) startDHTDiscovery() {
 	// ИЗМЕНЕНИЕ: Ждем, пока мы подключимся хотя бы к одному bootstrap-пиру.
 	// Это гарантирует, что наша таблица не пуста перед анонсом.
 	var wg sync.WaitGroup
+	bootstrapConnected := false
+
 	for _, p := range dht.DefaultBootstrapPeers {
 		peerinfo, _ := peer.AddrInfoFromP2pAddr(p)
 		wg.Add(1)
@@ -169,10 +307,19 @@ func (dm *DiscoveryManager) startDHTDiscovery() {
 				// Info("Не удалось подключиться к bootstrap-пиру: %s", err)
 			} else {
 				Info("✅ Установлено соединение с bootstrap-пиром: %s", peerinfo.ID.ShortString())
+				bootstrapConnected = true
 			}
 		}()
 	}
 	wg.Wait()
+
+	// Если не удалось подключиться к bootstrap узлам, пробуем кэшированные пиры
+	if !bootstrapConnected {
+		Info("⚠️ Не удалось подключиться к bootstrap узлам, пробуем кэшированные пиры...")
+		if err := dm.fallbackToCachedPeers(); err != nil {
+			Warn("⚠️ Не удалось подключиться к кэшированным пирам: %v", err)
+		}
+	}
 
 	Info("📢 Анонсируемся в глобальной сети...")
 	// Используем Ticker для периодического анонсирования, чтобы оставаться видимыми

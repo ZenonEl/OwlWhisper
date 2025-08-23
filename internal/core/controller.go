@@ -58,6 +58,12 @@ type ICoreController interface {
 	// FindPeer ищет пира в сети по PeerID
 	FindPeer(peerID peer.ID) (*peer.AddrInfo, error)
 
+	// FindProvidersForContent ищет провайдеров контента в DHT по ContentID
+	FindProvidersForContent(contentID string) ([]peer.AddrInfo, error)
+
+	// ProvideContent анонсирует текущий узел как провайдера контента в DHT
+	ProvideContent(contentID string) error
+
 	// GetConnectionQuality возвращает качество соединения с пиром
 	GetConnectionQuality(peerID peer.ID) map[string]interface{}
 
@@ -69,6 +75,18 @@ type ICoreController interface {
 
 	// Новые методы для работы с профилями
 
+	// Методы кэширования пиров
+	SavePeerToCache(peerID peer.ID, addresses []string, healthy bool) error
+	LoadPeerFromCache(peerID peer.ID) (*PeerCacheEntry, error)
+	GetAllCachedPeers() ([]PeerCacheEntry, error)
+	GetHealthyCachedPeers() ([]PeerCacheEntry, error)
+	RemovePeerFromCache(peerID peer.ID) error
+	ClearPeerCache() error
+
+	// Методы DHT routing table
+	SaveDHTRoutingTable() error
+	LoadDHTRoutingTableFromCache() error
+	GetRoutingTableStats() map[string]interface{}
 }
 
 // CoreController реализует ICoreController интерфейс
@@ -471,6 +489,80 @@ func (c *CoreController) FindPeer(peerID peer.ID) (*peer.AddrInfo, error) {
 	return nil, fmt.Errorf("discovery manager не доступен")
 }
 
+// FindProvidersForContent ищет провайдеров контента в DHT по ContentID
+func (c *CoreController) FindProvidersForContent(contentID string) ([]peer.AddrInfo, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if !c.running {
+		return nil, fmt.Errorf("контроллер не запущен")
+	}
+
+	if c.discovery == nil {
+		return nil, fmt.Errorf("DiscoveryManager недоступен")
+	}
+
+	// Используем routing.RoutingDiscovery - это правильный высокоуровневый способ
+	routingDiscovery := c.discovery.GetRoutingDiscovery()
+	if routingDiscovery == nil {
+		return nil, fmt.Errorf("RoutingDiscovery недоступен")
+	}
+
+	findCtx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
+	defer cancel()
+
+	// FindPeers возвращает <-chan peer.AddrInfo - правильный тип!
+	peersChan, err := routingDiscovery.FindPeers(findCtx, contentID)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка при поиске провайдеров в DHT: %w", err)
+	}
+
+	var providers []peer.AddrInfo
+	for peerInfo := range peersChan {
+		// Мы не хотим возвращать адрес самого себя, если нашли
+		if peerInfo.ID != c.node.GetHost().ID() {
+			providers = append(providers, peerInfo)
+		}
+	}
+
+	if len(providers) == 0 {
+		return nil, fmt.Errorf("провайдеры для контента '%s' не найдены", contentID)
+	}
+
+	Info("SUCCESS: Найдены провайдеры для контента %s", contentID)
+	return providers, nil
+}
+
+// ProvideContent анонсирует текущий узел как провайдера контента в DHT
+func (c *CoreController) ProvideContent(contentID string) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if !c.running {
+		return fmt.Errorf("контроллер не запущен")
+	}
+
+	if c.discovery == nil {
+		return fmt.Errorf("DiscoveryManager недоступен")
+	}
+
+	// Используем routing.RoutingDiscovery для анонсирования
+	routingDiscovery := c.discovery.GetRoutingDiscovery()
+	if routingDiscovery == nil {
+		return fmt.Errorf("RoutingDiscovery недоступен")
+	}
+
+	// Анонсируем себя как провайдера для данного contentID
+	// Это создаст "точку встречи" в DHT для поиска
+	_, err := routingDiscovery.Advertise(c.ctx, contentID)
+	if err != nil {
+		return fmt.Errorf("ошибка при анонсировании контента в DHT: %w", err)
+	}
+
+	Info("SUCCESS: Узел %s анонсирован как провайдер для контента %s", c.node.GetHost().ID().ShortString(), contentID)
+	return nil
+}
+
 // GetConnectionQuality возвращает качество соединения с пиром
 func (c *CoreController) GetConnectionQuality(peerID peer.ID) map[string]interface{} {
 	c.mu.RLock()
@@ -551,6 +643,80 @@ func (c *CoreController) Messages() <-chan RawMessage {
 // GetHost возвращает узел
 func (c *CoreController) GetHost() host.Host {
 	return c.node.GetHost()
+}
+
+// SavePeerToCache сохраняет пира в кэш
+func (c *CoreController) SavePeerToCache(peerID peer.ID, addresses []string, healthy bool) error {
+	if c.node == nil {
+		return fmt.Errorf("Node недоступен")
+	}
+	return c.node.SavePeerToCache(peerID, addresses, healthy)
+}
+
+// LoadPeerFromCache загружает пира из кэша
+func (c *CoreController) LoadPeerFromCache(peerID peer.ID) (*PeerCacheEntry, error) {
+	if c.node == nil {
+		return nil, fmt.Errorf("Node недоступен")
+	}
+	return c.node.LoadPeerFromCache(peerID)
+}
+
+// GetAllCachedPeers возвращает всех кэшированных пиров
+func (c *CoreController) GetAllCachedPeers() ([]PeerCacheEntry, error) {
+	if c.node == nil {
+		return nil, fmt.Errorf("Node недоступен")
+	}
+	return c.node.GetAllCachedPeers()
+}
+
+// GetHealthyCachedPeers возвращает только "здоровых" кэшированных пиров
+func (c *CoreController) GetHealthyCachedPeers() ([]PeerCacheEntry, error) {
+	if c.node == nil {
+		return nil, fmt.Errorf("Node недоступен")
+	}
+	return c.node.GetHealthyCachedPeers()
+}
+
+// RemovePeerFromCache удаляет пира из кэша
+func (c *CoreController) RemovePeerFromCache(peerID peer.ID) error {
+	if c.node == nil {
+		return fmt.Errorf("Node недоступен")
+	}
+	return c.node.RemovePeerFromCache(peerID)
+}
+
+// ClearPeerCache очищает весь кэш пиров
+func (c *CoreController) ClearPeerCache() error {
+	if c.node == nil {
+		return fmt.Errorf("Node недоступен")
+	}
+	return c.node.ClearPeerCache()
+}
+
+// SaveDHTRoutingTable сохраняет DHT routing table в кэш
+func (c *CoreController) SaveDHTRoutingTable() error {
+	if c.discovery == nil {
+		return fmt.Errorf("DiscoveryManager недоступен")
+	}
+	return c.discovery.SaveDHTRoutingTable(c.node.persistence)
+}
+
+// LoadDHTRoutingTableFromCache загружает DHT routing table из кэша
+func (c *CoreController) LoadDHTRoutingTableFromCache() error {
+	if c.discovery == nil {
+		return fmt.Errorf("DiscoveryManager недоступен")
+	}
+	return c.discovery.LoadDHTRoutingTableFromCache(c.node.persistence)
+}
+
+// GetRoutingTableStats возвращает статистику DHT routing table
+func (c *CoreController) GetRoutingTableStats() map[string]interface{} {
+	if c.discovery == nil {
+		return map[string]interface{}{
+			"status": "discovery_unavailable",
+		}
+	}
+	return c.discovery.GetRoutingTableStats()
 }
 
 // IsRunning проверяет, запущен ли контроллер
