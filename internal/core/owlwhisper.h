@@ -21,7 +21,20 @@ int SendMessageToPeer(char* peerID, char* text);
 // Получение информации
 char* GetMyPeerID();
 char* GetConnectedPeers();
+char* GetProtectedPeers();
 char* GetConnectionStatus();
+
+// Управление защищенными пирами
+int AddProtectedPeer(char* peerID);
+int RemoveProtectedPeer(char* peerID);
+int IsProtectedPeer(char* peerID);
+char* GetConnectionLimits();
+
+// Автопереподключение к защищенным пирам
+int EnableAutoReconnect();
+int DisableAutoReconnect();
+int IsAutoReconnectEnabled();
+int GetReconnectAttempts(char* peerID);
 
 // Получение истории
 char* GetChatHistory(char* peerID);

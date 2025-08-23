@@ -282,6 +282,139 @@ func GetConnectedPeers() *C.char {
 	return allocString(string(jsonData))
 }
 
+//export GetProtectedPeers
+func GetProtectedPeers() *C.char {
+	if globalController == nil {
+		return allocString("[]")
+	}
+
+	peers := globalController.GetProtectedPeers()
+	peerStrings := make([]string, len(peers))
+	for i, p := range peers {
+		peerStrings[i] = p.String()
+	}
+
+	jsonData, _ := json.Marshal(peerStrings)
+	return allocString(string(jsonData))
+}
+
+//export AddProtectedPeer
+func AddProtectedPeer(peerID *C.char) C.int {
+	if globalController == nil {
+		return -1
+	}
+
+	peerIDStr := C.GoString(peerID)
+	peerObj, err := peer.Decode(peerIDStr)
+	if err != nil {
+		return -1
+	}
+
+	err = globalController.AddProtectedPeer(peerObj)
+	if err != nil {
+		return -1
+	}
+
+	return 0
+}
+
+//export RemoveProtectedPeer
+func RemoveProtectedPeer(peerID *C.char) C.int {
+	if globalController == nil {
+		return -1
+	}
+
+	peerIDStr := C.GoString(peerID)
+	peerObj, err := peer.Decode(peerIDStr)
+	if err != nil {
+		return -1
+	}
+
+	err = globalController.RemoveProtectedPeer(peerObj)
+	if err != nil {
+		return -1
+	}
+
+	return 0
+}
+
+//export IsProtectedPeer
+func IsProtectedPeer(peerID *C.char) C.int {
+	if globalController == nil {
+		return 0
+	}
+
+	peerIDStr := C.GoString(peerID)
+	peerObj, err := peer.Decode(peerIDStr)
+	if err != nil {
+		return 0
+	}
+
+	if globalController.IsProtectedPeer(peerObj) {
+		return 1
+	}
+	return 0
+}
+
+//export GetConnectionLimits
+func GetConnectionLimits() *C.char {
+	if globalController == nil {
+		return nil
+	}
+
+	limits := globalController.GetConnectionLimits()
+	jsonData, _ := json.Marshal(limits)
+	return allocString(string(jsonData))
+}
+
+//export EnableAutoReconnect
+func EnableAutoReconnect() C.int {
+	if globalController == nil {
+		return -1
+	}
+
+	globalController.EnableAutoReconnect()
+	return 0
+}
+
+//export DisableAutoReconnect
+func DisableAutoReconnect() C.int {
+	if globalController == nil {
+		return -1
+	}
+
+	globalController.DisableAutoReconnect()
+	return 0
+}
+
+//export IsAutoReconnectEnabled
+func IsAutoReconnectEnabled() C.int {
+	if globalController == nil {
+		return 0
+	}
+
+	if globalController.IsAutoReconnectEnabled() {
+		return 1
+	}
+	return 0
+}
+
+//export GetReconnectAttempts
+func GetReconnectAttempts(peerID *C.char) C.int {
+	if globalController == nil {
+		return -1
+	}
+
+	peerIDStr := C.GoString(peerID)
+	peerObj, err := peer.Decode(peerIDStr)
+	if err != nil {
+		return -1
+	}
+
+	attempts := globalController.GetReconnectAttempts(peerObj)
+	return C.int(attempts)
+}
+
 //export GetConnectionStatus
 func GetConnectionStatus() *C.char {
 	if globalController == nil {

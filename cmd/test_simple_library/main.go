@@ -75,7 +75,7 @@ func main() {
 	}
 
 	// Получаем список пиров
-	peers := C.GetPeers()
+	peers := C.GetConnectedPeers()
 	if peers != nil {
 		peersStr := C.GoString(peers)
 		fmt.Printf("✅ Список пиров: %s\n", peersStr)

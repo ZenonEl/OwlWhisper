@@ -31,6 +31,27 @@ type ICoreController interface {
 	// GetConnectedPeers возвращает список подключенных пиров
 	GetConnectedPeers() []peer.ID
 
+	// GetProtectedPeers возвращает список защищенных пиров
+	GetProtectedPeers() []peer.ID
+
+	// AddProtectedPeer добавляет пира в защищенные
+	AddProtectedPeer(peerID peer.ID) error
+
+	// RemoveProtectedPeer удаляет пира из защищенных
+	RemoveProtectedPeer(peerID peer.ID) error
+
+	// IsProtectedPeer проверяет, является ли пир защищенным
+	IsProtectedPeer(peerID peer.ID) bool
+
+	// GetConnectionLimits возвращает текущие лимиты соединений
+	GetConnectionLimits() map[string]interface{}
+
+	// Автопереподключение к защищенным пирам
+	EnableAutoReconnect()
+	DisableAutoReconnect()
+	IsAutoReconnectEnabled() bool
+	GetReconnectAttempts(peerID peer.ID) int
+
 	// GetNetworkStats возвращает статистику сети для отладки
 	GetNetworkStats() map[string]interface{}
 
@@ -228,6 +249,122 @@ func (c *CoreController) GetMyID() string {
 // GetConnectedPeers возвращает список подключенных пиров
 func (c *CoreController) GetConnectedPeers() []peer.ID {
 	return c.node.GetConnectedPeers()
+}
+
+// GetProtectedPeers возвращает список защищенных пиров
+func (c *CoreController) GetProtectedPeers() []peer.ID {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if !c.running {
+		return nil
+	}
+
+	return c.node.GetProtectedPeers()
+}
+
+// AddProtectedPeer добавляет пира в защищенные
+func (c *CoreController) AddProtectedPeer(peerID peer.ID) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if !c.running {
+		return fmt.Errorf("контроллер не запущен")
+	}
+
+	c.node.AddProtectedPeer(peerID)
+	return nil
+}
+
+// RemoveProtectedPeer удаляет пира из защищенных
+func (c *CoreController) RemoveProtectedPeer(peerID peer.ID) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if !c.running {
+		return fmt.Errorf("контроллер не запущен")
+	}
+
+	if !c.node.IsProtectedPeer(peerID) {
+		return fmt.Errorf("пир %s не является защищенным", peerID.ShortString())
+	}
+
+	c.node.RemoveProtectedPeer(peerID)
+	return nil
+}
+
+// IsProtectedPeer проверяет, является ли пир защищенным
+func (c *CoreController) IsProtectedPeer(peerID peer.ID) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if !c.running {
+		return false
+	}
+
+	return c.node.IsProtectedPeer(peerID)
+}
+
+// GetConnectionLimits возвращает текущие лимиты соединений
+func (c *CoreController) GetConnectionLimits() map[string]interface{} {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if !c.running {
+		return map[string]interface{}{
+			"status": "not_running",
+		}
+	}
+
+	return c.node.GetConnectionLimits()
+}
+
+// EnableAutoReconnect включает автопереподключение к защищенным пирам
+func (c *CoreController) EnableAutoReconnect() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if !c.running {
+		return
+	}
+
+	c.node.EnableAutoReconnect()
+}
+
+// DisableAutoReconnect отключает автопереподключение к защищенным пирам
+func (c *CoreController) DisableAutoReconnect() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if !c.running {
+		return
+	}
+
+	c.node.DisableAutoReconnect()
+}
+
+// IsAutoReconnectEnabled проверяет, включено ли автопереподключение
+func (c *CoreController) IsAutoReconnectEnabled() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if !c.running {
+		return false
+	}
+
+	return c.node.IsAutoReconnectEnabled()
+}
+
+// GetReconnectAttempts возвращает количество попыток переподключения для пира
+func (c *CoreController) GetReconnectAttempts(peerID peer.ID) int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if !c.running {
+		return 0
+	}
+
+	return c.node.GetReconnectAttempts(peerID)
 }
 
 // GetNetworkStats возвращает статистику сети для отладки
