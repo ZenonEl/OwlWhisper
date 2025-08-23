@@ -136,7 +136,7 @@ func GenerateNewKeyPair() *C.char {
 
 	// Создаем JSON с ключом и PeerID
 	keyInfo := map[string]interface{}{
-		"private_key": keyBytes,
+		"private_key": base64.StdEncoding.EncodeToString(keyBytes), // Base64 для JSON
 		"peer_id":     peerID.String(),
 		"key_type":    "Ed25519",
 		"key_length":  len(keyBytes),
@@ -149,12 +149,30 @@ func GenerateNewKeyPair() *C.char {
 		return nil
 	}
 
-	// Конвертируем в base64 для безопасной передачи
-	encodedData := base64.StdEncoding.EncodeToString(jsonData)
-	
 	Info("🔑 Сгенерирована новая пара ключей для PeerID: %s", peerID.String())
-	
-	return allocString(encodedData)
+
+	return allocString(string(jsonData))
+}
+
+//export GenerateNewKeyBytes
+func GenerateNewKeyBytes() *C.char {
+	// Генерируем новую пару ключей Ed25519
+	privKey, _, err := crypto.GenerateKeyPairWithReader(crypto.Ed25519, 2048, rand.Reader)
+	if err != nil {
+		Error("❌ Ошибка генерации ключа: %v", err)
+		return nil
+	}
+
+	// Сериализуем ключ в libp2p формат (сырые байты)
+	keyBytes, err := crypto.MarshalPrivateKey(privKey)
+	if err != nil {
+		Error("❌ Ошибка сериализации ключа: %v", err)
+		return nil
+	}
+
+	Info("🔑 Сгенерированы сырые байты ключа длиной %d байт", len(keyBytes))
+
+	return allocString(string(keyBytes))
 }
 
 //export StopOwlWhisper
