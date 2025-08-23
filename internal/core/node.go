@@ -106,6 +106,7 @@ func NewNodeWithKey(ctx context.Context, privKey crypto.PrivKey, persistence *Pe
 		host:         h,
 		ctx:          ctx,
 		messagesChan: messagesChan,
+		peers:        make(map[peer.ID]bool), // 🔧 ИНИЦИАЛИЗАЦИЯ MAP!
 		persistence:  persistence,
 	}
 

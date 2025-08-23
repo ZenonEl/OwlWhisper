@@ -12,6 +12,7 @@ int StopOwlWhisper();
 
 // Генерация ключей
 char* GenerateNewKeyPair();
+char* GenerateNewKeyBytes();
 
 // Отправка сообщений
 int SendMessage(char* text);
