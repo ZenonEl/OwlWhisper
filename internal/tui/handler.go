@@ -80,7 +80,7 @@ func (h *Handler) showHelp() {
 // showPeers показывает список подключенных пиров
 func (h *Handler) showPeers() {
 	h.mu.Lock()
-	peers := h.controller.GetPeers()
+	peers := h.controller.GetConnectedPeers()
 	h.mu.Unlock()
 
 	if len(peers) == 0 {

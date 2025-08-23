@@ -50,7 +50,7 @@ func main() {
 
 	// Проверяем статус DHT
 	fmt.Println("\n📊 Проверяем статус DHT...")
-	peers1 := client1.GetPeers()
+	peers1 := client1.GetConnectedPeers()
 	fmt.Printf("🔍 Клиент 1 видит %d пиров в DHT: %v\n", len(peers1), peers1)
 
 	// Создаем второй клиент
@@ -72,7 +72,7 @@ func main() {
 	time.Sleep(10 * time.Second)
 
 	// Проверяем статус DHT для второго клиента
-	peers2 := client2.GetPeers()
+	peers2 := client2.GetConnectedPeers()
 	fmt.Printf("🔍 Клиент 2 видит %d пиров в DHT: %v\n", len(peers2), peers2)
 
 	// Теперь пытаемся найти друг друга через DHT
@@ -83,8 +83,8 @@ func main() {
 
 	// Финальная проверка
 	fmt.Println("\n📊 Финальная проверка DHT...")
-	peers1Final := client1.GetPeers()
-	peers2Final := client2.GetPeers()
+	peers1Final := client1.GetConnectedPeers()
+	peers2Final := client2.GetConnectedPeers()
 
 	fmt.Printf("🔍 Клиент 1: %d пиров в DHT\n", len(peers1Final))
 	fmt.Printf("🔍 Клиент 2: %d пиров в DHT\n", len(peers2Final))

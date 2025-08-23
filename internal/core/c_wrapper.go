@@ -172,7 +172,9 @@ func GenerateNewKeyBytes() *C.char {
 
 	Info("🔑 Сгенерированы сырые байты ключа длиной %d байт", len(keyBytes))
 
-	return allocString(string(keyBytes))
+	// Возвращаем base64-encoded строку для безопасной передачи
+	encodedKey := base64.StdEncoding.EncodeToString(keyBytes)
+	return allocString(encodedKey)
 }
 
 //export StopOwlWhisper
@@ -257,7 +259,7 @@ func GetPeers() *C.char {
 	}
 
 	// Получаем всех пиров из всех источников
-	peers := globalController.GetPeers()
+	peers := globalController.GetConnectedPeers()
 
 	// Если пиров нет, пробуем получить из узла напрямую
 	if len(peers) == 0 {
@@ -288,7 +290,7 @@ func GetConnectionStatus() *C.char {
 	}
 
 	// Получаем всех пиров из всех источников
-	peers := globalController.GetPeers()
+	peers := globalController.GetConnectedPeers()
 
 	// Если пиров нет, пробуем получить из узла напрямую
 	if len(peers) == 0 {
@@ -417,17 +419,26 @@ func GetPeerProfile(peerID *C.char) *C.char {
 
 //export SetLogLevel
 func SetLogLevel(level C.int) C.int {
+	// Получаем текущий логгер
+	currentLogger := GetGlobalLogger()
+	var currentOutput LogOutput = LogOutputConsole
+
+	if currentLogger != nil {
+		// Сохраняем текущие настройки вывода
+		currentOutput = currentLogger.output
+	}
+
 	switch level {
 	case 0: // SILENT
-		InitGlobalLogger(LogLevelSilent, LogOutputNone, "")
+		InitGlobalLogger(LogLevelSilent, currentOutput, "")
 	case 1: // ERROR
-		InitGlobalLogger(LogLevelError, LogOutputConsole, "")
+		InitGlobalLogger(LogLevelError, currentOutput, "")
 	case 2: // WARN
-		InitGlobalLogger(LogLevelWarn, LogOutputConsole, "")
+		InitGlobalLogger(LogLevelWarn, currentOutput, "")
 	case 3: // INFO
-		InitGlobalLogger(LogLevelInfo, LogOutputConsole, "")
+		InitGlobalLogger(LogLevelInfo, currentOutput, "")
 	case 4: // DEBUG
-		InitGlobalLogger(LogLevelDebug, LogOutputConsole, "")
+		InitGlobalLogger(LogLevelDebug, currentOutput, "")
 	default:
 		return C.int(1) // Ошибка
 	}

@@ -86,7 +86,7 @@ func TestFullWorkflow(t *testing.T) {
 
 	// 7. Проверка списка пиров
 	t.Log("📋 Шаг 7: Проверка списка пиров...")
-	peers := owlAPI.GetPeers()
+	peers := owlAPI.GetConnectedPeers()
 	t.Logf("✅ Список пиров: %d", len(peers))
 	for i, peer := range peers {
 		t.Logf("  %d: %s (%s)", i+1, peer.Nickname, peer.Status)
@@ -94,7 +94,7 @@ func TestFullWorkflow(t *testing.T) {
 
 	// 8. Тест каналов
 	t.Log("📋 Шаг 8: Тест каналов...")
-	
+
 	// Запускаем горутину для получения сообщений
 	messageReceived := make(chan bool, 1)
 	go func() {
@@ -201,7 +201,7 @@ func TestAPIPerformance(t *testing.T) {
 	// Тест получения истории
 	t.Log("📚 Тест получения истории...")
 	startTime = time.Now()
-	
+
 	history, err := owlAPI.GetHistory(messageCount)
 	if err != nil {
 		t.Errorf("❌ Ошибка получения истории: %v", err)
@@ -213,14 +213,14 @@ func TestAPIPerformance(t *testing.T) {
 	// Тест статуса подключения
 	t.Log("📊 Тест статуса подключения...")
 	startTime = time.Now()
-	
+
 	for i := 0; i < 100; i++ {
 		_ = owlAPI.GetConnectionStatus()
 	}
-	
+
 	duration = time.Since(startTime)
 	avgTime := duration / 100
-	
+
 	t.Logf("✅ 100 вызовов GetConnectionStatus за %v (среднее: %v)", duration, avgTime)
 
 	t.Log("🎉 Тест производительности завершен!")
@@ -317,4 +317,4 @@ func TestAPIRobustness(t *testing.T) {
 	}
 
 	t.Log("🎉 Тест устойчивости завершен!")
-} 
+}

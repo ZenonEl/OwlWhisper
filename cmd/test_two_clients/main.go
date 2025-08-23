@@ -70,8 +70,8 @@ func main() {
 	for i := 0; i < 10; i++ {
 		time.Sleep(2 * time.Second)
 
-		peers1 := client1.GetPeers()
-		peers2 := client2.GetPeers()
+		peers1 := client1.GetConnectedPeers()
+		peers2 := client2.GetConnectedPeers()
 
 		fmt.Printf("⏱️  Проверка %d/10:\n", i+1)
 		fmt.Printf("   Клиент 1: %d пиров\n", len(peers1))
@@ -85,8 +85,8 @@ func main() {
 
 	// Финальная проверка
 	fmt.Println("\n📊 Финальная проверка...")
-	peers1 := client1.GetPeers()
-	peers2 := client2.GetPeers()
+	peers1 := client1.GetConnectedPeers()
+	peers2 := client2.GetConnectedPeers()
 
 	fmt.Printf("🔍 Клиент 1 видит %d пиров: %v\n", len(peers1), peers1)
 	fmt.Printf("🔍 Клиент 2 видит %d пиров: %v\n", len(peers2), peers2)

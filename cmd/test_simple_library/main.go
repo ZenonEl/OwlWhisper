@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 	"time"
 	"unsafe"
@@ -30,13 +31,21 @@ func main() {
 	defer C.FreeString(keyData)
 
 	keyStr := C.GoString(keyData)
-	fmt.Printf("✅ Сырые байты ключа: %d байт\n", len(keyStr))
+	fmt.Printf("✅ Base64-encoded ключ: %d символов\n", len(keyStr))
+	fmt.Printf("🔍 Первые 20 символов: %s...\n", keyStr[:20])
 
 	// Шаг 2: Запускаем с ключом
 	fmt.Println("\n🚀 Шаг 2: Запускаем Owl Whisper...")
 
-	// Конвертируем строку в байты
-	keyBytes := []byte(keyStr)
+	// Декодируем base64 в байты
+	keyBytes, err := base64.StdEncoding.DecodeString(keyStr)
+	if err != nil {
+		fmt.Printf("❌ Ошибка декодирования base64: %v\n", err)
+		return
+	}
+
+	fmt.Printf("✅ Декодированный ключ: %d байт\n", len(keyBytes))
+	fmt.Printf("🔍 Первые 16 байт (hex): %x\n", keyBytes[:16])
 
 	result := C.StartOwlWhisperWithKey((*C.char)(unsafe.Pointer(&keyBytes[0])), C.int(len(keyBytes)))
 	if result != 0 {

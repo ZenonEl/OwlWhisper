@@ -28,8 +28,20 @@ type ICoreController interface {
 	// GetMyID возвращает ID текущего узла
 	GetMyID() string
 
-	// GetPeers возвращает список подключенных пиров
-	GetPeers() []peer.ID
+	// GetConnectedPeers возвращает список подключенных пиров
+	GetConnectedPeers() []peer.ID
+
+	// GetNetworkStats возвращает статистику сети для отладки
+	GetNetworkStats() map[string]interface{}
+
+	// FindPeer ищет пира в сети по PeerID
+	FindPeer(peerID peer.ID) (*peer.AddrInfo, error)
+
+	// FindPeerByNickname ищет пира по никнейму в локальной базе
+	FindPeerByNickname(nickname string) (*ProfileInfo, error)
+
+	// GetConnectionQuality возвращает качество соединения с пиром
+	GetConnectionQuality(peerID peer.ID) map[string]interface{}
 
 	// Messages возвращает канал для получения ВСЕХ входящих данных
 	Messages() <-chan RawMessage
@@ -240,9 +252,179 @@ func (c *CoreController) GetMyID() string {
 	return c.node.GetMyID()
 }
 
-// GetPeers возвращает список подключенных пиров
-func (c *CoreController) GetPeers() []peer.ID {
-	return c.node.GetPeers()
+// GetConnectedPeers возвращает список подключенных пиров
+func (c *CoreController) GetConnectedPeers() []peer.ID {
+	return c.node.GetConnectedPeers()
+}
+
+// GetNetworkStats возвращает статистику сети для отладки
+func (c *CoreController) GetNetworkStats() map[string]interface{} {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if !c.running {
+		return map[string]interface{}{
+			"status": "not_running",
+		}
+	}
+
+	host := c.node.GetHost()
+	if host == nil {
+		return map[string]interface{}{
+			"status": "no_host",
+		}
+	}
+
+	// Получаем статистику из libp2p
+	network := host.Network()
+	peers := network.Peers()
+	connections := network.Conns()
+
+	// Подсчитываем активные соединения по протоколам
+	protocolStats := make(map[string]int)
+	for _, conn := range connections {
+		for _, stream := range conn.GetStreams() {
+			protocol := string(stream.Protocol())
+			protocolStats[protocol]++
+		}
+	}
+
+	// Получаем информацию о DHT
+	dhtStats := map[string]interface{}{
+		"status": "unknown",
+	}
+	if c.discovery != nil {
+		// TODO: Добавить реальную статистику DHT
+		dhtStats["status"] = "active"
+	}
+
+	stats := map[string]interface{}{
+		"status":            "running",
+		"total_peers":       len(peers),
+		"connected_peers":   len(c.node.GetConnectedPeers()),
+		"total_connections": len(connections),
+		"protocols":         protocolStats,
+		"dht":               dhtStats,
+		"my_peer_id":        c.GetMyID(),
+		"listening_addrs":   host.Addrs(),
+	}
+
+	return stats
+}
+
+// FindPeer ищет пира в сети по PeerID
+func (c *CoreController) FindPeer(peerID peer.ID) (*peer.AddrInfo, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if !c.running {
+		return nil, fmt.Errorf("контроллер не запущен")
+	}
+
+	// Сначала проверяем, подключены ли мы уже к этому пиру
+	if c.node.IsConnected(peerID) {
+		host := c.node.GetHost()
+		addrs := host.Peerstore().Addrs(peerID)
+		return &peer.AddrInfo{
+			ID:    peerID,
+			Addrs: addrs,
+		}, nil
+	}
+
+	// Если не подключены, ищем через DHT
+	if c.discovery != nil {
+		// TODO: Реализовать поиск через DHT
+		// Пока возвращаем ошибку
+		return nil, fmt.Errorf("поиск через DHT пока не реализован")
+	}
+
+	return nil, fmt.Errorf("discovery manager не доступен")
+}
+
+// FindPeerByNickname ищет пира по никнейму в локальной базе
+func (c *CoreController) FindPeerByNickname(nickname string) (*ProfileInfo, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if !c.running {
+		return nil, fmt.Errorf("контроллер не запущен")
+	}
+
+	// TODO: Реализовать поиск по никнейму в локальной базе данных
+	// Пока возвращаем ошибку
+	return nil, fmt.Errorf("поиск по никнейму пока не реализован")
+}
+
+// GetConnectionQuality возвращает качество соединения с пиром
+func (c *CoreController) GetConnectionQuality(peerID peer.ID) map[string]interface{} {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if !c.running {
+		return map[string]interface{}{
+			"status": "not_running",
+		}
+	}
+
+	// Проверяем, подключены ли мы к этому пиру
+	if !c.node.IsConnected(peerID) {
+		return map[string]interface{}{
+			"status": "not_connected",
+		}
+	}
+
+	host := c.node.GetHost()
+	if host == nil {
+		return map[string]interface{}{
+			"status": "no_host",
+		}
+	}
+
+	// Получаем информацию о соединении
+	network := host.Network()
+	connections := network.ConnsToPeer(peerID)
+
+	if len(connections) == 0 {
+		return map[string]interface{}{
+			"status": "no_connections",
+		}
+	}
+
+	// Анализируем качество соединения
+	var totalStreams int
+	var activeStreams int
+	protocols := make(map[string]int)
+
+	for _, conn := range connections {
+		streams := conn.GetStreams()
+		totalStreams += len(streams)
+
+		for _, stream := range streams {
+			protocol := string(stream.Protocol())
+			protocols[protocol]++
+
+			// Проверяем, активен ли стрим
+			if !stream.Stat().Opened.IsZero() {
+				activeStreams++
+			}
+		}
+	}
+
+	// Получаем адреса пира
+	addrs := host.Peerstore().Addrs(peerID)
+
+	quality := map[string]interface{}{
+		"status":            "connected",
+		"peer_id":           peerID.String(),
+		"total_connections": len(connections),
+		"total_streams":     totalStreams,
+		"active_streams":    activeStreams,
+		"protocols":         protocols,
+		"addresses":         addrs,
+		"latency_ms":        -1, // TODO: Реализовать измерение латентности
+	}
+
+	return quality
 }
 
 // Messages возвращает канал для получения входящих сообщений
