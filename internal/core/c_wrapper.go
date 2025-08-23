@@ -12,7 +12,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"sync"
-	"time"
 	"unsafe"
 
 	"github.com/libp2p/go-libp2p/core/crypto"
@@ -252,8 +251,8 @@ func GetMyPeerID() *C.char {
 	return allocString(peerID)
 }
 
-//export GetPeers
-func GetPeers() *C.char {
+//export GetConnectedPeers
+func GetConnectedPeers() *C.char {
 	if globalController == nil {
 		return allocString("[]")
 	}
@@ -289,16 +288,8 @@ func GetConnectionStatus() *C.char {
 		return C.CString("{}")
 	}
 
-	// Получаем всех пиров из всех источников
+	// Получаем подключенных пиров
 	peers := globalController.GetConnectedPeers()
-
-	// Если пиров нет, пробуем получить из узла напрямую
-	if len(peers) == 0 {
-		host := globalController.GetHost()
-		if host != nil {
-			peers = host.Network().Peers()
-		}
-	}
 
 	status := map[string]interface{}{
 		"connected":  len(peers) > 0,
@@ -356,43 +347,8 @@ func FreeString(str *C.char) {
 	freeString(str)
 }
 
-//export GetMyProfile
-func GetMyProfile() *C.char {
-	if globalController == nil {
-		return allocString("{}")
-	}
-
-	profile := globalController.GetMyProfile()
-	profileData := map[string]interface{}{
-		"nickname":      profile.Nickname,
-		"discriminator": profile.Discriminator,
-		"display_name":  profile.DisplayName,
-		"peer_id":       profile.PeerID,
-		"last_seen":     profile.LastSeen.Format(time.RFC3339),
-		"is_online":     profile.IsOnline,
-	}
-
-	jsonData, _ := json.Marshal(profileData)
-	return allocString(string(jsonData))
-}
-
-//export UpdateMyProfile
-func UpdateMyProfile(nickname *C.char) C.int {
-	if globalController == nil {
-		return -1
-	}
-
-	goNickname := C.GoString(nickname)
-	err := globalController.UpdateMyProfile(goNickname)
-	if err != nil {
-		return -1
-	}
-
-	return 0
-}
-
-//export GetPeerProfile
-func GetPeerProfile(peerID *C.char) *C.char {
+//export FindPeer
+func FindPeer(peerID *C.char) *C.char {
 	if globalController == nil {
 		return allocString("{}")
 	}
@@ -403,17 +359,48 @@ func GetPeerProfile(peerID *C.char) *C.char {
 		return allocString("{}")
 	}
 
-	profile := globalController.GetPeerProfile(peerObj)
-	profileData := map[string]interface{}{
-		"nickname":      profile.Nickname,
-		"discriminator": profile.Discriminator,
-		"display_name":  profile.DisplayName,
-		"peer_id":       profile.PeerID,
-		"last_seen":     profile.LastSeen.Format(time.RFC3339),
-		"is_online":     profile.IsOnline,
+	addrInfo, err := globalController.FindPeer(peerObj)
+	if err != nil {
+		errorData := map[string]interface{}{
+			"error": err.Error(),
+		}
+		jsonData, _ := json.Marshal(errorData)
+		return allocString(string(jsonData))
 	}
 
-	jsonData, _ := json.Marshal(profileData)
+	peerData := map[string]interface{}{
+		"id":    addrInfo.ID.String(),
+		"addrs": addrInfo.Addrs,
+	}
+	jsonData, _ := json.Marshal(peerData)
+	return allocString(string(jsonData))
+}
+
+//export GetNetworkStats
+func GetNetworkStats() *C.char {
+	if globalController == nil {
+		return allocString("{}")
+	}
+
+	stats := globalController.GetNetworkStats()
+	jsonData, _ := json.Marshal(stats)
+	return allocString(string(jsonData))
+}
+
+//export GetConnectionQuality
+func GetConnectionQuality(peerID *C.char) *C.char {
+	if globalController == nil {
+		return allocString("{}")
+	}
+
+	goPeerID := C.GoString(peerID)
+	peerObj, err := peer.Decode(goPeerID)
+	if err != nil {
+		return allocString("{}")
+	}
+
+	quality := globalController.GetConnectionQuality(peerObj)
+	jsonData, _ := json.Marshal(quality)
 	return allocString(string(jsonData))
 }
 
