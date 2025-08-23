@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
@@ -15,6 +16,24 @@ import (
 
 // PROTOCOL_ID - уникальный идентификатор нашего чат-протокола
 const PROTOCOL_ID = "/owl-whisper/1.0.0"
+
+// Лимиты соединений для ConnectionManager
+const (
+	// Максимальное количество инфраструктурных соединений (bootstrap, DHT, mDNS)
+	MAX_INFRASTRUCTURE_CONNECTIONS = 50
+	// Максимальное количество защищенных соединений (контакты)
+	MAX_PROTECTED_CONNECTIONS = 100
+	// Общий лимит соединений
+	MAX_TOTAL_CONNECTIONS = 200
+)
+
+// Настройки автопереподключения
+const (
+	// Интервал между попытками переподключения
+	RECONNECT_INTERVAL = 30 * time.Second
+	// Максимальное количество попыток переподключения
+	MAX_RECONNECT_ATTEMPTS = 5
+)
 
 // NetworkEventLogger логирует сетевые события
 type NetworkEventLogger struct{}
@@ -47,6 +66,34 @@ type Node struct {
 
 	// Менеджер персистентности для управления ключами
 	persistence *PersistenceManager
+
+	// Мьютекс для защищенных пиров
+	protectedPeersMutex sync.RWMutex
+	protectedPeers      map[peer.ID]bool
+
+	// ConnectionManager для управления соединениями
+	connManager interface {
+		Protect(peer.ID, string)
+		Unprotect(peer.ID, string) bool
+		IsProtected(peer.ID, string) bool
+	}
+
+	// Лимиты соединений
+	connectionLimits struct {
+		infrastructure int // Текущее количество инфраструктурных соединений
+		protected      int // Текущее количество защищенных соединений
+		total          int // Общее количество соединений
+	}
+	limitsMutex sync.RWMutex
+
+	// Автопереподключение к защищенным пирам
+	reconnectManager struct {
+		enabled     bool
+		interval    time.Duration
+		maxAttempts int
+		attempts    map[peer.ID]int
+	}
+	reconnectMutex sync.RWMutex
 }
 
 // NewNode создает новый libp2p узел (для обратной совместимости)
@@ -103,12 +150,20 @@ func NewNodeWithKey(ctx context.Context, privKey crypto.PrivKey, persistence *Pe
 	messagesChan := make(chan RawMessage, 100)
 
 	node := &Node{
-		host:         h,
-		ctx:          ctx,
-		messagesChan: messagesChan,
-		peers:        make(map[peer.ID]bool), // 🔧 ИНИЦИАЛИЗАЦИЯ MAP!
-		persistence:  persistence,
+		host:           h,
+		ctx:            ctx,
+		messagesChan:   messagesChan,
+		peers:          make(map[peer.ID]bool), // 🔧 ИНИЦИАЛИЗАЦИЯ MAP!
+		persistence:    persistence,
+		protectedPeers: make(map[peer.ID]bool),
+		connManager:    h.ConnManager(),
 	}
+
+	// Инициализируем менеджер автопереподключения
+	node.reconnectManager.enabled = true
+	node.reconnectManager.interval = RECONNECT_INTERVAL
+	node.reconnectManager.maxAttempts = MAX_RECONNECT_ATTEMPTS
+	node.reconnectManager.attempts = make(map[peer.ID]int)
 
 	// Устанавливаем обработчик потоков
 	h.SetStreamHandler(PROTOCOL_ID, node.handleStream)
@@ -170,7 +225,19 @@ func (n *Node) AddPeer(peerID peer.ID) {
 	n.peersMutex.Lock()
 	defer n.peersMutex.Unlock()
 
+	// Проверяем, можно ли добавить соединение
+	if !n.canAddInfrastructureConnection() {
+		Warn("⚠️ Достигнут лимит инфраструктурных соединений для пира %s", peerID.ShortString())
+		return
+	}
+
 	n.peers[peerID] = true
+
+	// Увеличиваем счетчик инфраструктурных соединений
+	if n.addInfrastructureConnection() {
+		Info("🔗 Добавлен инфраструктурный пир %s (всего: %d/%d)",
+			peerID.ShortString(), n.connectionLimits.infrastructure, MAX_INFRASTRUCTURE_CONNECTIONS)
+	}
 }
 
 // RemovePeer удаляет пира из списка
@@ -178,7 +245,274 @@ func (n *Node) RemovePeer(peerID peer.ID) {
 	n.peersMutex.Lock()
 	defer n.peersMutex.Unlock()
 
-	delete(n.peers, peerID)
+	// Проверяем, был ли пир в списке
+	if n.peers[peerID] {
+		delete(n.peers, peerID)
+
+		// Уменьшаем счетчик инфраструктурных соединений
+		n.removeInfrastructureConnection()
+
+		Info("🔌 Удален инфраструктурный пир %s (осталось: %d/%d)",
+			peerID.ShortString(), n.connectionLimits.infrastructure, MAX_INFRASTRUCTURE_CONNECTIONS)
+	}
+}
+
+// AddProtectedPeer добавляет пира в список защищенных
+func (n *Node) AddProtectedPeer(peerID peer.ID) {
+	n.protectedPeersMutex.Lock()
+	defer n.protectedPeersMutex.Unlock()
+
+	// Проверяем, можно ли добавить защищенное соединение
+	if !n.canAddProtectedConnection() {
+		Warn("⚠️ Достигнут лимит защищенных соединений для пира %s", peerID.ShortString())
+		return
+	}
+
+	n.protectedPeers[peerID] = true
+
+	// Защищаем соединение с этим пиром
+	if n.connManager != nil {
+		n.connManager.Protect(peerID, "owl-whisper-protected")
+	}
+
+	// Увеличиваем счетчик защищенных соединений
+	if n.addProtectedConnection() {
+		Info("🔒 Пир %s добавлен в защищенные (всего: %d/%d)",
+			peerID.ShortString(), n.connectionLimits.protected, MAX_PROTECTED_CONNECTIONS)
+	}
+}
+
+// RemoveProtectedPeer удаляет пира из списка защищенных
+func (n *Node) RemoveProtectedPeer(peerID peer.ID) {
+	n.protectedPeersMutex.Lock()
+	defer n.protectedPeersMutex.Unlock()
+
+	// Проверяем, был ли пир в списке
+	if n.protectedPeers[peerID] {
+		delete(n.protectedPeers, peerID)
+
+		// Снимаем защиту с соединения
+		if n.connManager != nil {
+			n.connManager.Unprotect(peerID, "owl-whisper-protected")
+		}
+
+		// Уменьшаем счетчик защищенных соединений
+		n.removeProtectedConnection()
+
+		Info("🔓 Пир %s удален из защищенных (осталось: %d/%d)",
+			peerID.ShortString(), n.connectionLimits.protected, MAX_PROTECTED_CONNECTIONS)
+	}
+}
+
+// IsProtectedPeer проверяет, является ли пир защищенным
+func (n *Node) IsProtectedPeer(peerID peer.ID) bool {
+	n.protectedPeersMutex.RLock()
+	defer n.protectedPeersMutex.RUnlock()
+
+	return n.protectedPeers[peerID]
+}
+
+// GetProtectedPeers возвращает список защищенных пиров
+func (n *Node) GetProtectedPeers() []peer.ID {
+	n.protectedPeersMutex.RLock()
+	defer n.protectedPeersMutex.RUnlock()
+
+	peers := make([]peer.ID, 0, len(n.protectedPeers))
+	for peerID := range n.protectedPeers {
+		peers = append(peers, peerID)
+	}
+	return peers
+}
+
+// GetConnectionLimits возвращает текущие лимиты соединений
+func (n *Node) GetConnectionLimits() map[string]interface{} {
+	n.limitsMutex.RLock()
+	defer n.limitsMutex.RUnlock()
+
+	return map[string]interface{}{
+		"infrastructure": map[string]interface{}{
+			"current": n.connectionLimits.infrastructure,
+			"max":     MAX_INFRASTRUCTURE_CONNECTIONS,
+		},
+		"protected": map[string]interface{}{
+			"current": n.connectionLimits.protected,
+			"max":     MAX_PROTECTED_CONNECTIONS,
+		},
+		"total": map[string]interface{}{
+			"current": n.connectionLimits.total,
+			"max":     MAX_TOTAL_CONNECTIONS,
+		},
+	}
+}
+
+// canAddInfrastructureConnection проверяет, можно ли добавить инфраструктурное соединение
+func (n *Node) canAddInfrastructureConnection() bool {
+	n.limitsMutex.RLock()
+	defer n.limitsMutex.RUnlock()
+
+	return n.connectionLimits.infrastructure < MAX_INFRASTRUCTURE_CONNECTIONS &&
+		n.connectionLimits.total < MAX_TOTAL_CONNECTIONS
+}
+
+// canAddProtectedConnection проверяет, можно ли добавить защищенное соединение
+func (n *Node) canAddProtectedConnection() bool {
+	n.limitsMutex.RLock()
+	defer n.limitsMutex.RUnlock()
+
+	return n.connectionLimits.protected < MAX_PROTECTED_CONNECTIONS &&
+		n.connectionLimits.total < MAX_TOTAL_CONNECTIONS
+}
+
+// addInfrastructureConnection добавляет инфраструктурное соединение
+func (n *Node) addInfrastructureConnection() bool {
+	n.limitsMutex.Lock()
+	defer n.limitsMutex.Unlock()
+
+	if n.connectionLimits.infrastructure < MAX_INFRASTRUCTURE_CONNECTIONS &&
+		n.connectionLimits.total < MAX_TOTAL_CONNECTIONS {
+		n.connectionLimits.infrastructure++
+		n.connectionLimits.total++
+		return true
+	}
+	return false
+}
+
+// removeInfrastructureConnection удаляет инфраструктурное соединение
+func (n *Node) removeInfrastructureConnection() {
+	n.limitsMutex.Lock()
+	defer n.limitsMutex.Unlock()
+
+	if n.connectionLimits.infrastructure > 0 {
+		n.connectionLimits.infrastructure--
+	}
+	if n.connectionLimits.total > 0 {
+		n.connectionLimits.total--
+	}
+}
+
+// addProtectedConnection добавляет защищенное соединение
+func (n *Node) addProtectedConnection() bool {
+	n.limitsMutex.Lock()
+	defer n.limitsMutex.Unlock()
+
+	if n.connectionLimits.protected < MAX_PROTECTED_CONNECTIONS &&
+		n.connectionLimits.total < MAX_TOTAL_CONNECTIONS {
+		n.connectionLimits.protected++
+		n.connectionLimits.total++
+		return true
+	}
+	return false
+}
+
+// removeProtectedConnection удаляет защищенное соединение
+func (n *Node) removeProtectedConnection() {
+	n.limitsMutex.Lock()
+	defer n.limitsMutex.Unlock()
+
+	if n.connectionLimits.protected > 0 {
+		n.connectionLimits.protected--
+	}
+	if n.connectionLimits.total > 0 {
+		n.connectionLimits.total--
+	}
+}
+
+// EnableAutoReconnect включает автопереподключение к защищенным пирам
+func (n *Node) EnableAutoReconnect() {
+	n.reconnectMutex.Lock()
+	defer n.reconnectMutex.Unlock()
+
+	n.reconnectManager.enabled = true
+	Info("🔄 Автопереподключение к защищенным пирам включено")
+}
+
+// DisableAutoReconnect отключает автопереподключение к защищенным пирам
+func (n *Node) DisableAutoReconnect() {
+	n.reconnectMutex.Lock()
+	defer n.reconnectMutex.Unlock()
+
+	n.reconnectManager.enabled = false
+	Info("⏸️ Автопереподключение к защищенным пирам отключено")
+}
+
+// IsAutoReconnectEnabled проверяет, включено ли автопереподключение
+func (n *Node) IsAutoReconnectEnabled() bool {
+	n.reconnectMutex.RLock()
+	defer n.reconnectMutex.RUnlock()
+
+	return n.reconnectManager.enabled
+}
+
+// GetReconnectAttempts возвращает количество попыток переподключения для пира
+func (n *Node) GetReconnectAttempts(peerID peer.ID) int {
+	n.reconnectMutex.RLock()
+	defer n.reconnectMutex.RUnlock()
+
+	return n.reconnectManager.attempts[peerID]
+}
+
+// startReconnectLoop запускает цикл автопереподключения
+func (n *Node) startReconnectLoop() {
+	go func() {
+		ticker := time.NewTicker(n.reconnectManager.interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-n.ctx.Done():
+				return
+			case <-ticker.C:
+				n.reconnectProtectedPeers()
+			}
+		}
+	}()
+}
+
+// reconnectProtectedPeers пытается переподключиться к отключенным защищенным пирам
+func (n *Node) reconnectProtectedPeers() {
+	n.reconnectMutex.RLock()
+	enabled := n.reconnectManager.enabled
+	n.reconnectMutex.RUnlock()
+
+	if !enabled {
+		return
+	}
+
+	// Получаем список защищенных пиров
+	protectedPeers := n.GetProtectedPeers()
+
+	for _, peerID := range protectedPeers {
+		// Проверяем, подключен ли пир
+		if !n.IsConnected(peerID) {
+			n.attemptReconnect(peerID)
+		}
+	}
+}
+
+// attemptReconnect пытается переподключиться к конкретному пиру
+func (n *Node) attemptReconnect(peerID peer.ID) {
+	n.reconnectMutex.Lock()
+	attempts := n.reconnectManager.attempts[peerID]
+	maxAttempts := n.reconnectManager.maxAttempts
+	n.reconnectMutex.Unlock()
+
+	if attempts >= maxAttempts {
+		Warn("⚠️ Превышен лимит попыток переподключения к пиру %s (%d/%d)",
+			peerID.ShortString(), attempts, maxAttempts)
+		return
+	}
+
+	Info("🔄 Попытка переподключения к защищенному пиру %s (%d/%d)",
+		peerID.ShortString(), attempts+1, maxAttempts)
+
+	// Здесь должна быть логика переподключения через libp2p
+	// Пока просто увеличиваем счетчик попыток
+	n.reconnectMutex.Lock()
+	n.reconnectManager.attempts[peerID]++
+	n.reconnectMutex.Unlock()
+
+	// TODO: Реализовать реальное переподключение через host.Connect()
+	// Для этого нужно сохранять адреса защищенных пиров
 }
 
 // Send отправляет данные конкретному пиру
