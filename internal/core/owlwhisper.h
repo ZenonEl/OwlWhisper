@@ -52,6 +52,9 @@ char* GetConnectionQuality(char* peerID);
 // Анонсирование контента
 int ProvideContent(char* contentID);
 
+// События - единственный канал асинхронной связи с клиентом
+char* GetNextEvent();
+
 
 // Функции для настройки логирования
 extern int SetLogLevel(int level);

@@ -2,55 +2,43 @@ syntax = "proto3";
 
 package protocol;
 
-option go_package = "OwlWhisper/internal/protocol";
+option go_package = "./";
 
-// ---------------------------------------------------------------- //
-// ----------------- ОСНОВНЫЕ СТРУКТУРЫ СООБЩЕНИЙ ----------------- //
-// ---------------------------------------------------------------- //
-
-// Envelope - это "конверт", в который заворачивается каждое
-// сообщение, передаваемое по сети.
+// Envelope - "конверт", в который заворачивается каждое
+// сообщение, передаваемое по сети между пирами.
 message Envelope {
-    string message_id = 1;          // Уникальный ID конверта (UUID)
-    string sender_id = 2;           // PeerID отправителя
-    int64 timestamp_unix = 3;       // Время отправки
+    string message_id = 1;      // Уникальный ID конверта (UUID)
+    string sender_id = 2;       // PeerID отправителя
+    int64 timestamp_unix = 3;   // Время отправки
     
-    // Тип чата. Enum - это эффективно и типобезопасно.
     enum ChatType {
         PRIVATE = 0; // Личное сообщение
         GROUP = 1;   // Групповой чат
     }
     ChatType chat_type = 4;
     
-    // ID чата (для групп - ID группы, для личных - PeerID собеседника)
-    string chat_id = 5;
+    string chat_id = 5;         // ID чата (для групп - ID группы, для личных - PeerID собеседника)
 
-    // Содержимое сообщения. oneof гарантирует, что внутри будет
-    // что-то одно: либо текстовое сообщение, либо статус, либо что-то еще.
     oneof payload {
-        Content content = 6;            // Полезная нагрузка (текст, файл, и т.д.)
+        Content content = 6;            // Полезная нагрузка (текст, файл)
         ReadReceipts read_receipts = 7; // Уведомление о прочтении
-        ProfileInfo profile_info = 8;   // Информация о профиле (НОВОЕ!)
+        ProfileInfo profile_info = 8;   // Информация о профиле
+        PingMessage ping = 9;           // Ping для проверки соединения
+        PongMessage pong = 10;          // Pong в ответ на Ping
     }
 }
 
-
-// Content - это сама "полезная нагрузка" сообщения.
+// Content - сама "полезная нагрузка" сообщения.
 message Content {
     oneof type {
         TextMessage text = 1;
         FileMetadata file = 2;
-        // В будущем можно добавить: Sticker, SystemNotification и т.д.
     }
 }
 
-// ---------------------------------------------------------------- //
-// ----------------- ТИПЫ КОНТЕНТА ----------------- //
-// ---------------------------------------------------------------- //
-
 message TextMessage {
     string body = 1;
-    string reply_to_message_id = 2; // ID сообщения, на которое отвечаем (опционально)
+    string reply_to_message_id = 2;
 }
 
 message FileMetadata {
@@ -62,56 +50,23 @@ message FileMetadata {
 
 // ReadReceipts - уведомление о прочтении одного или нескольких сообщений.
 message ReadReceipts {
-    repeated string message_ids = 1; // ID прочитанных сообщений
+    repeated string message_ids = 1;
 }
 
-// ---------------------------------------------------------------- //
-// ----------------- ПРОФИЛИ И ИДЕНТИФИКАЦИЯ ----------------- //
-// ---------------------------------------------------------------- //
-
-// ProfileInfo - информация о профиле пользователя
+// ProfileInfo - информация о профиле пользователя для обмена между клиентами.
 message ProfileInfo {
-    string nickname = 1;           // Основной никнейм
-    string discriminator = 2;      // Дискриминатор (#xxxxxx) - из PeerID
-    string display_name = 3;       // Отображаемое имя (может отличаться от nickname)
-    string avatar_hash = 4;        // Хеш аватара (если есть)
-    int64 last_seen = 5;          // Последний раз онлайн (timestamp)
-    bool is_online = 6;           // Статус онлайн/оффлайн
-    
-    // Метаданные профиля (для мобильных платформ)
-    map<string, string> metadata = 7; // Дополнительные поля (версия приложения, платформа и т.д.)
+    string nickname = 1;
+    string discriminator = 2;
+    string display_name = 3;
+    string avatar_hash = 4;
+    map<string, string> metadata = 5; // Например, {"clientVersion": "0.1.0", "platform": "desktop"}
 }
 
-// ---------------------------------------------------------------- //
-// ----------------- СООБЩЕНИЯ ДЛЯ RPC (Запрос/Ответ) ----------------- //
-// ---------------------------------------------------------------- //
-
-// Запрос на получение истории сообщений
-message GetHistoryRequest {
-    string chat_id = 1;
-    int64 before_timestamp = 2; // Сообщения до этой временной метки
-    int32 limit = 3;            // Максимальное количество
-}
-
-// Ответ с порцией истории сообщений
-message GetHistoryResponse {
-    repeated Envelope messages = 1;
-    bool has_more = 2; // Есть ли еще более старые сообщения
-}
-
-// ---------------------------------------------------------------- //
-// ----------------- СЕТЕВЫЕ СООБЩЕНИЯ ----------------- //
-// ---------------------------------------------------------------- //
-
-// Ping/Pong для проверки соединения (важно для мобильных платформ)
+// Ping/Pong для проверки соединения и обмена метаданными.
 message PingMessage {
     int64 timestamp = 1;
-    string client_version = 2;    // Версия клиента
-    string platform = 3;          // Платформа (android/ios/desktop)
 }
 
 message PongMessage {
-    int64 timestamp = 1;
-    int64 latency_ms = 2;        // Задержка в миллисекундах
-    string server_version = 3;    // Версия сервера
+    int64 request_timestamp = 1; // Возвращаем timestamp из соответствующего Ping
 }

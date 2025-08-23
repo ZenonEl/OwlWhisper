@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -87,6 +88,9 @@ type ICoreController interface {
 	SaveDHTRoutingTable() error
 	LoadDHTRoutingTableFromCache() error
 	GetRoutingTableStats() map[string]interface{}
+
+	// События - единственный канал асинхронной связи с клиентом
+	GetNextEvent() string
 }
 
 // CoreController реализует ICoreController интерфейс
@@ -166,7 +170,7 @@ func createControllerFromNode(ctx context.Context, cancel context.CancelFunc, no
 	discovery, err := NewDiscoveryManager(ctx, node.GetHost(), func(pi peer.AddrInfo) {
 		// Когда найден новый пир, добавляем его в Node
 		node.AddPeer(pi.ID)
-	})
+	}, node.GetEventManager())
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("не удалось создать DiscoveryManager: %w", err)
@@ -730,4 +734,31 @@ func (c *CoreController) IsRunning() bool {
 // IsConnected проверяет, подключен ли указанный пир
 func (c *CoreController) IsConnected(peerID peer.ID) bool {
 	return c.node.IsConnected(peerID)
+}
+
+// GetNextEvent блокирующе получает следующее событие из очереди
+func (c *CoreController) GetNextEvent() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if !c.running {
+		return ""
+	}
+
+	if c.node == nil || c.node.GetEventManager() == nil {
+		return ""
+	}
+
+	event, err := c.node.GetEventManager().GetNextEvent()
+	if err != nil {
+		return ""
+	}
+
+	// Сериализуем событие в JSON
+	jsonData, err := json.Marshal(event)
+	if err != nil {
+		return ""
+	}
+
+	return string(jsonData)
 }

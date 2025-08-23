@@ -61,10 +61,13 @@ type DiscoveryManager struct {
 
 	// Канал для уведомлений о новых пирах
 	peersChan chan peer.AddrInfo
+
+	// EventManager для отправки событий статуса сети
+	eventManager *EventManager
 }
 
 // NewDiscoveryManager создает новый менеджер обнаружения
-func NewDiscoveryManager(ctx context.Context, host host.Host, onPeer func(peer.AddrInfo)) (*DiscoveryManager, error) {
+func NewDiscoveryManager(ctx context.Context, host host.Host, onPeer func(peer.AddrInfo), eventManager *EventManager) (*DiscoveryManager, error) {
 	ctx, cancel := context.WithCancel(ctx)
 
 	notifee := &DiscoveryNotifee{
@@ -95,6 +98,7 @@ func NewDiscoveryManager(ctx context.Context, host host.Host, onPeer func(peer.A
 		ctx:              ctx,
 		cancel:           cancel,
 		peersChan:        make(chan peer.AddrInfo, 100),
+		eventManager:     eventManager,
 	}
 
 	return dm, nil
@@ -291,6 +295,12 @@ func (dm *DiscoveryManager) startMDNSDiscovery() {
 
 // startDHTDiscovery запускает поиск через DHT
 func (dm *DiscoveryManager) startDHTDiscovery() {
+	// Отправляем событие о начале подключения к DHT
+	if dm.eventManager != nil {
+		event := NetworkStatusEvent("CONNECTING_TO_DHT", "Подключение к bootstrap-узлам...")
+		dm.eventManager.PushEvent(event)
+	}
+
 	Info("🌐 Подключение к bootstrap узлам...")
 
 	// ИЗМЕНЕНИЕ: Ждем, пока мы подключимся хотя бы к одному bootstrap-пиру.
@@ -363,6 +373,12 @@ func (dm *DiscoveryManager) startDHTDiscovery() {
 
 		Info("🌐 Найден участник в глобальной сети: %s", p.ID.ShortString())
 		dm.notifee.HandlePeerFound(p)
+	}
+
+	// Отправляем событие о готовности сети
+	if dm.eventManager != nil {
+		event := NetworkStatusEvent("NETWORK_READY", "Готов к работе в сети")
+		dm.eventManager.PushEvent(event)
 	}
 }
 
