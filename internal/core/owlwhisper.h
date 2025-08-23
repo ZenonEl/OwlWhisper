@@ -45,9 +45,12 @@ int ConnectToPeer(char* peerID);
 
 // Поиск и диагностика
 char* FindPeer(char* peerID);
+char* FindProvidersForContent(char* contentID);
 char* GetNetworkStats();
 char* GetConnectionQuality(char* peerID);
 
+// Анонсирование контента
+int ProvideContent(char* contentID);
 
 
 // Функции для настройки логирования

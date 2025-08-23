@@ -67,6 +67,9 @@ type Node struct {
 	// Менеджер персистентности для управления ключами
 	persistence *PersistenceManager
 
+	// DiscoveryManager для работы с DHT
+	discovery *DiscoveryManager
+
 	// Мьютекс для защищенных пиров
 	protectedPeersMutex sync.RWMutex
 	protectedPeers      map[peer.ID]bool
@@ -171,17 +174,46 @@ func NewNodeWithKey(ctx context.Context, privKey crypto.PrivKey, persistence *Pe
 	// Добавляем логирование сетевых событий
 	h.Network().Notify(&NetworkEventLogger{})
 
+	// Создаем DiscoveryManager
+	discovery, err := NewDiscoveryManager(ctx, h, func(pi peer.AddrInfo) {
+		node.AddPeer(pi.ID)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("не удалось создать DiscoveryManager: %w", err)
+	}
+
+	node.discovery = discovery
+
 	return node, nil
 }
 
 // Start запускает узел
 func (n *Node) Start() error {
+	// Запускаем DiscoveryManager
+	if n.discovery != nil {
+		if err := n.discovery.Start(); err != nil {
+			return fmt.Errorf("не удалось запустить DiscoveryManager: %w", err)
+		}
+	}
+
 	Info("🚀 Узел запущен")
 	return nil
 }
 
 // Stop останавливает узел
 func (n *Node) Stop() error {
+	// Сохраняем DHT routing table перед остановкой
+	if err := n.SaveDHTRoutingTable(); err != nil {
+		Warn("⚠️ Не удалось сохранить DHT routing table: %v", err)
+	}
+
+	// Останавливаем DiscoveryManager
+	if n.discovery != nil {
+		if err := n.discovery.Stop(); err != nil {
+			Warn("⚠️ Ошибка остановки DiscoveryManager: %v", err)
+		}
+	}
+
 	if err := n.host.Close(); err != nil {
 		return fmt.Errorf("ошибка остановки узла: %w", err)
 	}
@@ -238,6 +270,24 @@ func (n *Node) AddPeer(peerID peer.ID) {
 		Info("🔗 Добавлен инфраструктурный пир %s (всего: %d/%d)",
 			peerID.ShortString(), n.connectionLimits.infrastructure, MAX_INFRASTRUCTURE_CONNECTIONS)
 	}
+
+	// Сохраняем пира в кэш
+	go func() {
+		addrs := n.host.Peerstore().Addrs(peerID)
+		var addrStrings []string
+		for _, addr := range addrs {
+			addrStrings = append(addrStrings, addr.String())
+		}
+
+		// Определяем, является ли пир "здоровым" (есть адреса)
+		healthy := len(addrStrings) > 0
+
+		if err := n.SavePeerToCache(peerID, addrStrings, healthy); err != nil {
+			Warn("⚠️ Не удалось сохранить пира %s в кэш: %v", peerID.ShortString(), err)
+		} else {
+			Info("💾 Пир %s сохранен в кэш", peerID.ShortString())
+		}
+	}()
 }
 
 // RemovePeer удаляет пира из списка
@@ -280,6 +330,22 @@ func (n *Node) AddProtectedPeer(peerID peer.ID) {
 		Info("🔒 Пир %s добавлен в защищенные (всего: %d/%d)",
 			peerID.ShortString(), n.connectionLimits.protected, MAX_PROTECTED_CONNECTIONS)
 	}
+
+	// Сохраняем защищенного пира в кэш как "здорового"
+	go func() {
+		addrs := n.host.Peerstore().Addrs(peerID)
+		var addrStrings []string
+		for _, addr := range addrs {
+			addrStrings = append(addrStrings, addr.String())
+		}
+
+		// Защищенные пиры всегда считаются "здоровыми"
+		if err := n.SavePeerToCache(peerID, addrStrings, true); err != nil {
+			Warn("⚠️ Не удалось сохранить защищенного пира %s в кэш: %v", peerID.ShortString(), err)
+		} else {
+			Info("💾 Защищенный пир %s сохранен в кэш", peerID.ShortString())
+		}
+	}()
 }
 
 // RemoveProtectedPeer удаляет пира из списка защищенных
@@ -449,6 +515,80 @@ func (n *Node) GetReconnectAttempts(peerID peer.ID) int {
 	defer n.reconnectMutex.RUnlock()
 
 	return n.reconnectManager.attempts[peerID]
+}
+
+// SavePeerToCache сохраняет пира в кэш
+func (n *Node) SavePeerToCache(peerID peer.ID, addresses []string, healthy bool) error {
+	if n.persistence == nil {
+		return fmt.Errorf("PersistenceManager недоступен")
+	}
+	return n.persistence.SavePeerToCache(peerID, addresses, healthy)
+}
+
+// LoadPeerFromCache загружает пира из кэша
+func (n *Node) LoadPeerFromCache(peerID peer.ID) (*PeerCacheEntry, error) {
+	if n.persistence == nil {
+		return nil, fmt.Errorf("PersistenceManager недоступен")
+	}
+	return n.persistence.LoadPeerFromCache(peerID)
+}
+
+// GetAllCachedPeers возвращает всех кэшированных пиров
+func (n *Node) GetAllCachedPeers() ([]PeerCacheEntry, error) {
+	if n.persistence == nil {
+		return nil, fmt.Errorf("PersistenceManager недоступен")
+	}
+	return n.persistence.GetAllCachedPeers()
+}
+
+// GetHealthyCachedPeers возвращает только "здоровых" кэшированных пиров
+func (n *Node) GetHealthyCachedPeers() ([]PeerCacheEntry, error) {
+	if n.persistence == nil {
+		return nil, fmt.Errorf("PersistenceManager недоступен")
+	}
+	return n.persistence.GetHealthyCachedPeers()
+}
+
+// RemovePeerFromCache удаляет пира из кэша
+func (n *Node) RemovePeerFromCache(peerID peer.ID) error {
+	if n.persistence == nil {
+		return fmt.Errorf("PersistenceManager недоступен")
+	}
+	return n.persistence.RemovePeerFromCache(peerID)
+}
+
+// ClearPeerCache очищает весь кэш пиров
+func (n *Node) ClearPeerCache() error {
+	if n.persistence == nil {
+		return fmt.Errorf("PersistenceManager недоступен")
+	}
+	return n.persistence.ClearPeerCache()
+}
+
+// SaveDHTRoutingTable сохраняет DHT routing table в кэш
+func (n *Node) SaveDHTRoutingTable() error {
+	if n.discovery == nil {
+		return fmt.Errorf("DiscoveryManager недоступен")
+	}
+	return n.discovery.SaveDHTRoutingTable(n.persistence)
+}
+
+// LoadDHTRoutingTableFromCache загружает DHT routing table из кэша
+func (n *Node) LoadDHTRoutingTableFromCache() error {
+	if n.discovery == nil {
+		return fmt.Errorf("DiscoveryManager недоступен")
+	}
+	return n.discovery.LoadDHTRoutingTableFromCache(n.persistence)
+}
+
+// GetRoutingTableStats возвращает статистику DHT routing table
+func (n *Node) GetRoutingTableStats() map[string]interface{} {
+	if n.discovery == nil {
+		return map[string]interface{}{
+			"status": "discovery_unavailable",
+		}
+	}
+	return n.discovery.GetRoutingTableStats()
 }
 
 // startReconnectLoop запускает цикл автопереподключения
