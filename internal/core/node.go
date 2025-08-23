@@ -35,18 +35,38 @@ const (
 	MAX_RECONNECT_ATTEMPTS = 5
 )
 
-// NetworkEventLogger логирует сетевые события
-type NetworkEventLogger struct{}
+// NetworkEventLogger логирует сетевые события и отправляет их в EventManager
+type NetworkEventLogger struct {
+	node *Node
+}
 
 func (nel *NetworkEventLogger) Listen(network.Network, multiaddr.Multiaddr)      {}
 func (nel *NetworkEventLogger) ListenClose(network.Network, multiaddr.Multiaddr) {}
 
 func (nel *NetworkEventLogger) Connected(net network.Network, conn network.Conn) {
+	peerID := conn.RemotePeer().String()
 	Info("🔗 EVENT: Успешное соединение с %s", conn.RemotePeer().ShortString())
+
+	// Отправляем событие в EventManager
+	if nel.node != nil && nel.node.eventManager != nil {
+		event := PeerConnectedEvent(peerID)
+		if err := nel.node.eventManager.PushEvent(event); err != nil {
+			Warn("⚠️ Не удалось отправить событие PeerConnected: %v", err)
+		}
+	}
 }
 
 func (nel *NetworkEventLogger) Disconnected(net network.Network, conn network.Conn) {
+	peerID := conn.RemotePeer().String()
 	Info("🔌 EVENT: Соединение с %s разорвано", conn.RemotePeer().ShortString())
+
+	// Отправляем событие в EventManager
+	if nel.node != nil && nel.node.eventManager != nil {
+		event := PeerDisconnectedEvent(peerID)
+		if err := nel.node.eventManager.PushEvent(event); err != nil {
+			Warn("⚠️ Не удалось отправить событие PeerDisconnected: %v", err)
+		}
+	}
 }
 
 func (nel *NetworkEventLogger) OpenedStream(network.Network, network.Stream) {}
@@ -97,6 +117,9 @@ type Node struct {
 		attempts    map[peer.ID]int
 	}
 	reconnectMutex sync.RWMutex
+
+	// EventManager для управления событиями
+	eventManager *EventManager
 }
 
 // NewNode создает новый libp2p узел (для обратной совместимости)
@@ -160,6 +183,7 @@ func NewNodeWithKey(ctx context.Context, privKey crypto.PrivKey, persistence *Pe
 		persistence:    persistence,
 		protectedPeers: make(map[peer.ID]bool),
 		connManager:    h.ConnManager(),
+		eventManager:   NewEventManager(1000), // Очередь на 1000 событий
 	}
 
 	// Инициализируем менеджер автопереподключения
@@ -172,12 +196,12 @@ func NewNodeWithKey(ctx context.Context, privKey crypto.PrivKey, persistence *Pe
 	h.SetStreamHandler(PROTOCOL_ID, node.handleStream)
 
 	// Добавляем логирование сетевых событий
-	h.Network().Notify(&NetworkEventLogger{})
+	h.Network().Notify(&NetworkEventLogger{node: node})
 
 	// Создаем DiscoveryManager
 	discovery, err := NewDiscoveryManager(ctx, h, func(pi peer.AddrInfo) {
 		node.AddPeer(pi.ID)
-	})
+	}, node.eventManager)
 	if err != nil {
 		return nil, fmt.Errorf("не удалось создать DiscoveryManager: %w", err)
 	}
@@ -214,6 +238,11 @@ func (n *Node) Stop() error {
 		}
 	}
 
+	// Останавливаем EventManager
+	if n.eventManager != nil {
+		n.eventManager.Stop()
+	}
+
 	if err := n.host.Close(); err != nil {
 		return fmt.Errorf("ошибка остановки узла: %w", err)
 	}
@@ -225,6 +254,11 @@ func (n *Node) Stop() error {
 // GetHost возвращает host.Host для внутреннего использования
 func (n *Node) GetHost() host.Host {
 	return n.host
+}
+
+// GetEventManager возвращает EventManager для управления событиями
+func (n *Node) GetEventManager() *EventManager {
+	return n.eventManager
 }
 
 // GetMyID возвращает ID текущего узла
@@ -727,6 +761,14 @@ func (n *Node) handleStream(stream network.Stream) {
 		Info("📨 Сообщение от %s добавлено в очередь", remotePeer.ShortString())
 	default:
 		Warn("⚠️ Канал сообщений переполнен, сообщение от %s потеряно", remotePeer.ShortString())
+	}
+
+	// Отправляем событие в EventManager
+	if n.eventManager != nil {
+		event := NewMessageEvent(remotePeer.String(), buffer[:bytesRead])
+		if err := n.eventManager.PushEvent(event); err != nil {
+			Warn("⚠️ Не удалось отправить событие NewMessage: %v", err)
+		}
 	}
 
 	stream.Close()

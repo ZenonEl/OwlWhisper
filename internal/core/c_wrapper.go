@@ -813,3 +813,19 @@ func ProvideContent(contentID *C.char) C.int {
 
 	return C.int(1)
 }
+
+//export GetNextEvent
+func GetNextEvent() *C.char {
+	if globalController == nil {
+		return nil
+	}
+
+	// Блокирующе получаем следующее событие
+	eventJSON := globalController.GetNextEvent()
+	if eventJSON == "" {
+		return nil
+	}
+
+	// Возвращаем JSON строку события
+	return allocString(eventJSON)
+}
