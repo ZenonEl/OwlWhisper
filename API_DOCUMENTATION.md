@@ -413,15 +413,16 @@ print(f"Мой ID: {my_id}")
 owlwhisper.FreeString(peer_id)  # Освобождаем память
 ```
 
-#### `GetPeers() -> str*`
+#### `GetConnectedPeers() -> str*`
 Получает список всех подключенных пиров.
 - **Возвращает:** JSON-массив с Peer ID'ами
 - **⚠️ Важно:** Не забудьте вызвать `FreeString()` после использования
+- **💡 Изменение:** Переименовано с `GetPeers()` для ясности
 - **Пример:**
 ```python
 import json
 
-peers_data = owlwhisper.GetPeers()
+peers_data = owlwhisper.GetConnectedPeers()
 peers_json = ctypes.string_at(peers_data).decode()
 peers = json.loads(peers_json)
 print(f"Подключено пиров: {len(peers)}")
@@ -507,6 +508,88 @@ peer_id = "12D3KooW...".encode('utf-8')
 result = owlwhisper.ConnectToPeer(peer_id)
 if result == 0:
     print("✅ Подключение установлено")
+```
+
+### 📊 Сетевая диагностика и мониторинг
+
+#### `GetNetworkStats() -> str*`
+Получает детальную статистику сети для отладки.
+- **Возвращает:** JSON-объект с подробной информацией о сети
+- **⚠️ Важно:** Не забудьте вызвать `FreeString()` после использования
+- **Пример:**
+```python
+import json
+
+stats_data = owlwhisper.GetNetworkStats()
+stats_json = ctypes.string_at(stats_data).decode()
+stats = json.loads(stats_json)
+print(f"Статус: {stats['status']}")
+print(f"Всего пиров: {stats['total_peers']}")
+print(f"Подключенных пиров: {stats['connected_peers']}")
+print(f"Всего соединений: {stats['total_connections']}")
+print(f"Протоколы: {stats['protocols']}")
+owlwhisper.FreeString(stats_data)
+```
+
+#### `GetConnectionQuality(peer_id: str) -> str*`
+Получает качество соединения с конкретным пиром.
+- **Параметры:** `peer_id` - Peer ID пира
+- **Возвращает:** JSON-объект с информацией о качестве соединения
+- **⚠️ Важно:** Не забудьте вызвать `FreeString()` после использования
+- **Пример:**
+```python
+import json
+
+peer_id = "12D3KooW...".encode('utf-8')
+quality_data = owlwhisper.GetConnectionQuality(peer_id)
+quality_json = ctypes.string_at(quality_data).decode()
+quality = json.loads(quality_json)
+print(f"Статус: {quality['status']}")
+print(f"Соединений: {quality['total_connections']}")
+print(f"Стримов: {quality['total_streams']}")
+print(f"Протоколы: {quality['protocols']}")
+owlwhisper.FreeString(quality_data)
+```
+
+### 🔍 Поиск и обнаружение пиров
+
+#### `FindPeer(peer_id: str) -> str*`
+Ищет пира в сети по PeerID.
+- **Параметры:** `peer_id` - Peer ID для поиска
+- **Возвращает:** JSON-объект с информацией о найденном пире
+- **⚠️ Важно:** Не забудьте вызвать `FreeString()` после использования
+- **💡 Примечание:** Пока ищет только среди уже подключенных пиров
+- **Пример:**
+```python
+import json
+
+peer_id = "12D3KooW...".encode('utf-8')
+peer_data = owlwhisper.FindPeer(peer_id)
+if peer_data:
+    peer_json = ctypes.string_at(peer_data).decode()
+    peer_info = json.loads(peer_json)
+    print(f"Найден пир: {peer_info['id']}")
+    print(f"Адреса: {peer_info['addrs']}")
+    owlwhisper.FreeString(peer_data)
+```
+
+#### `FindPeerByNickname(nickname: str) -> str*`
+Ищет пира по никнейму в локальной базе данных.
+- **Параметры:** `nickname` - никнейм для поиска
+- **Возвращает:** JSON-объект с информацией о профиле пира
+- **⚠️ Важно:** Не забудьте вызвать `FreeString()` после использования
+- **💡 Примечание:** Пока возвращает заглушку (не реализовано)
+- **Пример:**
+```python
+import json
+
+nickname = "Друг".encode('utf-8')
+profile_data = owlwhisper.FindPeerByNickname(nickname)
+if profile_data:
+    profile_json = ctypes.string_at(profile_data).decode()
+    profile = json.loads(profile_json)
+    print(f"Найден профиль: {profile['nickname']}")
+    owlwhisper.FreeString(profile_data)
 ```
 
 ### 🔑 Генерация ключей
@@ -646,7 +729,7 @@ def main():
         print(f"🌐 Статус: {status}")
         
         # Получаем пиров
-        peers_data = owlwhisper.GetPeers()
+        peers_data = owlwhisper.GetConnectedPeers()
         peers_json = ctypes.string_at(peers_data).decode()
         peers = json.loads(peers_json)
         owlwhisper.FreeString(peers_data)
@@ -689,7 +772,7 @@ const owlwhisper = ffi.Library('./dist/libowlwhisper', {
     'GenerateNewKeyPair': ['string', []],
     'SendMessage': ['int', ['string']],
     'GetMyPeerID': ['string', []],
-    'GetPeers': ['string', []],
+    'GetConnectedPeers': ['string', []],
     'GetConnectionStatus': ['string', []],
     'FreeString': ['void', ['string']]
 });
@@ -787,7 +870,7 @@ owlwhisper.SetLogOutput(3, "./logs")
 ### 🔄 Асинхронность
 - Некоторые операции (подключение к пирам, обнаружение) происходят асинхронно
 - Используйте `GetConnectionStatus()` для проверки текущего состояния
-- Регулярно вызывайте `GetPeers()` для обновления списка пиров
+- Регулярно вызывайте `GetConnectedPeers()` для обновления списка пиров
 
 ---
 
@@ -870,4 +953,4 @@ internal/core/
 3. Проверьте, что библиотека запущена перед вызовом функций
 4. Убедитесь, что прошло достаточно времени для обнаружения пиров
 
-**Последнее обновление:** 23 августа 2025 (добавлена функция `GenerateNewKeyBytes`, исправлены критические баги)
+**Последнее обновление:** 23 августа 2025 (Этап 1 завершен: добавлены сетевые методы, переименован GetPeers, исправлены критические баги)

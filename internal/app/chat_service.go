@@ -347,7 +347,7 @@ func (cs *ChatService) monitorPeers() {
 	for {
 		select {
 		case <-ticker.C:
-			currentPeers := cs.coreController.GetPeers()
+			currentPeers := cs.coreController.GetConnectedPeers()
 
 			// Проверяем новых пиров
 			for _, peerID := range currentPeers {

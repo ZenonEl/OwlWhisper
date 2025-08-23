@@ -45,7 +45,7 @@ func TestAPIBasicFunctionality(t *testing.T) {
 	t.Logf("✅ Статус подключения: %+v", status)
 
 	// Проверяем список пиров
-	peers := owlAPI.GetPeers()
+	peers := owlAPI.GetConnectedPeers()
 	t.Logf("✅ Список пиров: %d", len(peers))
 
 	// Проверяем историю сообщений
@@ -190,7 +190,7 @@ func TestAPIMessageChannels(t *testing.T) {
 
 	// Отправляем тестовые сообщения
 	time.Sleep(1 * time.Second)
-	
+
 	requests := []api.SendMessageRequest{
 		{Text: "Сообщение 1 для теста каналов", ChatType: "broadcast"},
 		{Text: "Сообщение 2 для теста каналов", ChatType: "broadcast"},
@@ -293,4 +293,4 @@ func TestAPIMessageSizeLimit(t *testing.T) {
 	} else {
 		t.Log("✅ Длинное сообщение корректно отклонено")
 	}
-} 
+}

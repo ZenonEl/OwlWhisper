@@ -78,8 +78,8 @@ func TestTwoClientsCommunication(t *testing.T) {
 			t.Log("⏰ Таймаут ожидания обнаружения пиров")
 			break
 		default:
-			peers1 := client1.GetPeers()
-			peers2 := client2.GetPeers()
+			peers1 := client1.GetConnectedPeers()
+			peers2 := client2.GetConnectedPeers()
 
 			if len(peers1) > 0 || len(peers2) > 0 {
 				peersFound = true
@@ -263,7 +263,7 @@ func TestMultipleClients(t *testing.T) {
 	// Проверяем что все клиенты видят друг друга
 	t.Log("🔍 Проверяем видимость клиентов...")
 	for i, client := range clients {
-		peers := client.GetPeers()
+		peers := client.GetConnectedPeers()
 		t.Logf("📊 Клиент %d видит %d пиров", i+1, len(peers))
 	}
 
@@ -373,4 +373,4 @@ func TestClientReconnection(t *testing.T) {
 	}
 
 	t.Log("✅ Тест переподключения завершен")
-} 
+}

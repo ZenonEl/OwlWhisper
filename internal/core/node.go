@@ -145,8 +145,8 @@ func (n *Node) GetMyID() string {
 	return n.host.ID().String()
 }
 
-// GetPeers возвращает список подключенных пиров
-func (n *Node) GetPeers() []peer.ID {
+// GetConnectedPeers возвращает список подключенных пиров
+func (n *Node) GetConnectedPeers() []peer.ID {
 	n.peersMutex.RLock()
 	defer n.peersMutex.RUnlock()
 
@@ -202,7 +202,7 @@ func (n *Node) Send(peerID peer.ID, data []byte) error {
 
 // Broadcast отправляет данные всем подключенным пирам
 func (n *Node) Broadcast(data []byte) error {
-	peers := n.GetPeers()
+	peers := n.GetConnectedPeers()
 	if len(peers) == 0 {
 		Warn("⚠️ Нет подключенных пиров для broadcast")
 		return nil
