@@ -20,7 +20,7 @@ int SendMessageToPeer(char* peerID, char* text);
 
 // Получение информации
 char* GetMyPeerID();
-char* GetPeers();
+char* GetConnectedPeers();
 char* GetConnectionStatus();
 
 // Получение истории
@@ -30,10 +30,12 @@ char* GetChatHistoryLimit(char* peerID, int limit);
 // Подключение к пирам
 int ConnectToPeer(char* peerID);
 
-// Функции для работы с профилями
-extern char* GetMyProfile();
-extern int UpdateMyProfile(char* nickname);
-extern char* GetPeerProfile(char* peer_id);
+// Поиск и диагностика
+char* FindPeer(char* peerID);
+char* GetNetworkStats();
+char* GetConnectionQuality(char* peerID);
+
+
 
 // Функции для настройки логирования
 extern int SetLogLevel(int level);

@@ -139,6 +139,11 @@ func (dm *DiscoveryManager) Stop() error {
 	return nil
 }
 
+// GetDHT возвращает DHT для использования в других частях системы
+func (dm *DiscoveryManager) GetDHT() *dht.IpfsDHT {
+	return dm.dht
+}
+
 // startMDNSDiscovery запускает mDNS discovery
 func (dm *DiscoveryManager) startMDNSDiscovery() {
 	Info("🏠 Поиск локальных пиров через mDNS...")
@@ -212,11 +217,6 @@ func (dm *DiscoveryManager) startDHTDiscovery() {
 		Info("🌐 Найден участник в глобальной сети: %s", p.ID.ShortString())
 		dm.notifee.HandlePeerFound(p)
 	}
-}
-
-// GetDHT возвращает DHT для внутреннего использования
-func (dm *DiscoveryManager) GetDHT() *dht.IpfsDHT {
-	return dm.dht
 }
 
 // GetRoutingDiscovery возвращает routing discovery для внутреннего использования

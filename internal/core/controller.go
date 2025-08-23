@@ -37,9 +37,6 @@ type ICoreController interface {
 	// FindPeer ищет пира в сети по PeerID
 	FindPeer(peerID peer.ID) (*peer.AddrInfo, error)
 
-	// FindPeerByNickname ищет пира по никнейму в локальной базе
-	FindPeerByNickname(nickname string) (*ProfileInfo, error)
-
 	// GetConnectionQuality возвращает качество соединения с пиром
 	GetConnectionQuality(peerID peer.ID) map[string]interface{}
 
@@ -50,20 +47,7 @@ type ICoreController interface {
 	GetHost() host.Host
 
 	// Новые методы для работы с профилями
-	GetMyProfile() *ProfileInfo
-	UpdateMyProfile(nickname string) error
-	GetPeerProfile(peerID peer.ID) *ProfileInfo
-	SendProfileToPeer(peerID peer.ID) error
-}
 
-// ProfileInfo представляет профиль пользователя
-type ProfileInfo struct {
-	Nickname      string
-	Discriminator string
-	DisplayName   string
-	PeerID        string
-	LastSeen      time.Time
-	IsOnline      bool
 }
 
 // CoreController реализует ICoreController интерфейс
@@ -79,9 +63,6 @@ type CoreController struct {
 
 	// Статус работы
 	running bool
-
-	// Кэшированный профиль пользователя
-	userProfile *UserProfile
 }
 
 // NewCoreController создает новый Core контроллер (для обратной совместимости)
@@ -152,19 +133,11 @@ func createControllerFromNode(ctx context.Context, cancel context.CancelFunc, no
 		return nil, fmt.Errorf("не удалось создать DiscoveryManager: %w", err)
 	}
 
-	// Загружаем профиль пользователя
-	userProfile, err := node.persistence.LoadProfile()
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("не удалось загрузить профиль: %w", err)
-	}
-
 	controller := &CoreController{
-		node:        node,
-		discovery:   discovery,
-		ctx:         ctx,
-		cancel:      cancel,
-		userProfile: userProfile,
+		node:      node,
+		discovery: discovery,
+		ctx:       ctx,
+		cancel:    cancel,
 	}
 
 	return controller, nil
@@ -333,26 +306,32 @@ func (c *CoreController) FindPeer(peerID peer.ID) (*peer.AddrInfo, error) {
 
 	// Если не подключены, ищем через DHT
 	if c.discovery != nil {
-		// TODO: Реализовать поиск через DHT
-		// Пока возвращаем ошибку
-		return nil, fmt.Errorf("поиск через DHT пока не реализован")
+		// Получаем DHT из discovery manager
+		dht := c.discovery.GetDHT()
+		if dht == nil {
+			return nil, fmt.Errorf("DHT недоступен")
+		}
+
+		// Создаем контекст с таймаутом для DHT поиска
+		// 30 секунд - разумное значение для публичной DHT
+		findCtx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
+		defer cancel()
+
+		// Ищем пира через DHT
+		addrInfo, err := dht.FindPeer(findCtx, peerID)
+		if err != nil {
+			// Проверяем, является ли это ошибкой "не найден"
+			if err.Error() == "routing: not found" {
+				return nil, fmt.Errorf("пир %s не найден в DHT (вероятно, офлайн)", peerID.ShortString())
+			}
+			return nil, fmt.Errorf("ошибка при поиске в DHT: %w", err)
+		}
+
+		Info("SUCCESS: Пир %s успешно найден в DHT", addrInfo.ID.ShortString())
+		return &addrInfo, nil
 	}
 
 	return nil, fmt.Errorf("discovery manager не доступен")
-}
-
-// FindPeerByNickname ищет пира по никнейму в локальной базе
-func (c *CoreController) FindPeerByNickname(nickname string) (*ProfileInfo, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	if !c.running {
-		return nil, fmt.Errorf("контроллер не запущен")
-	}
-
-	// TODO: Реализовать поиск по никнейму в локальной базе данных
-	// Пока возвращаем ошибку
-	return nil, fmt.Errorf("поиск по никнейму пока не реализован")
 }
 
 // GetConnectionQuality возвращает качество соединения с пиром
@@ -448,94 +427,4 @@ func (c *CoreController) IsRunning() bool {
 // IsConnected проверяет, подключен ли указанный пир
 func (c *CoreController) IsConnected(peerID peer.ID) bool {
 	return c.node.IsConnected(peerID)
-}
-
-// GetMyProfile возвращает профиль текущего узла
-func (c *CoreController) GetMyProfile() *ProfileInfo {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	peerID := c.GetMyID()
-
-	// Генерируем discriminator из последних 6 символов PeerID
-	discriminator := ""
-	if len(peerID) >= 6 {
-		discriminator = "#" + peerID[len(peerID)-6:]
-	}
-
-	// Используем сохраненный профиль
-	nickname := "Anonymous"
-	displayName := "Anonymous" + discriminator
-	if c.userProfile != nil {
-		nickname = c.userProfile.Nickname
-		if nickname != "" && nickname != "Anonymous" {
-			displayName = nickname + discriminator
-		}
-	}
-
-	return &ProfileInfo{
-		Nickname:      nickname,
-		Discriminator: discriminator,
-		DisplayName:   displayName,
-		PeerID:        peerID,
-		LastSeen:      time.Now(),
-		IsOnline:      true,
-	}
-}
-
-// UpdateMyProfile обновляет профиль текущего узла
-func (c *CoreController) UpdateMyProfile(nickname string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Обновляем кэшированный профиль
-	if c.userProfile == nil {
-		c.userProfile = &UserProfile{
-			Nickname:    nickname,
-			DisplayName: nickname,
-			CreatedAt:   time.Now(),
-			UpdatedAt:   time.Now(),
-		}
-	} else {
-		c.userProfile.Nickname = nickname
-		c.userProfile.DisplayName = nickname
-		c.userProfile.UpdatedAt = time.Now()
-	}
-
-	// Сохраняем в файл
-	if err := c.node.persistence.SaveProfile(c.userProfile); err != nil {
-		Error("❌ Ошибка сохранения профиля: %v", err)
-		return fmt.Errorf("не удалось сохранить профиль: %w", err)
-	}
-
-	Info("📝 Профиль обновлен: %s", nickname)
-	return nil
-}
-
-// GetPeerProfile возвращает профиль указанного пира
-func (c *CoreController) GetPeerProfile(peerID peer.ID) *ProfileInfo {
-	// TODO: Реализовать получение профиля из кэша или запрос
-	// Пока возвращаем базовую информацию
-	discriminator := ""
-	peerIDStr := peerID.String()
-	if len(peerIDStr) >= 6 {
-		discriminator = "#" + peerIDStr[len(peerIDStr)-6:]
-	}
-
-	return &ProfileInfo{
-		Nickname:      "Unknown",
-		Discriminator: discriminator,
-		DisplayName:   "Unknown" + discriminator,
-		PeerID:        peerIDStr,
-		LastSeen:      time.Now(),
-		IsOnline:      c.IsConnected(peerID),
-	}
-}
-
-// SendProfileToPeer отправляет профиль указанному пиру
-func (c *CoreController) SendProfileToPeer(peerID peer.ID) error {
-	// TODO: Реализовать отправку ProfileInfo через Protobuf
-	// Пока просто логируем
-	Info("📤 Отправка профиля к %s", peerID.ShortString())
-	return nil
 }
