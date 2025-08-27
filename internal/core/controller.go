@@ -7,8 +7,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ipfs/go-cid"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
@@ -88,6 +90,7 @@ type ICoreController interface {
 	SaveDHTRoutingTable() error
 	LoadDHTRoutingTableFromCache() error
 	GetRoutingTableStats() map[string]interface{}
+	GetDHTRoutingTableSize() int
 
 	// События - единственный канал асинхронной связи с клиентом
 	GetNextEvent() string
@@ -106,6 +109,11 @@ type CoreController struct {
 
 	// Статус работы
 	running bool
+
+	// Периодическое анонсирование
+	announcementTicker *time.Ticker
+	lastContentID      string
+	lastAnnounceTime   time.Time
 }
 
 // NewCoreController создает новый Core контроллер (для обратной совместимости)
@@ -208,6 +216,11 @@ func (c *CoreController) Start() error {
 	c.running = true
 	Info("🚀 Core контроллер запущен")
 
+	// Запускаем периодическое анонсирование если есть ContentID
+	if c.lastContentID != "" {
+		c.startPeriodicAnnouncement()
+	}
+
 	return nil
 }
 
@@ -228,6 +241,12 @@ func (c *CoreController) Stop() error {
 	// Останавливаем Node
 	if err := c.node.Stop(); err != nil {
 		Warn("⚠️ Ошибка остановки Discovery: %v", err)
+	}
+
+	// Останавливаем периодическое анонсирование
+	if c.announcementTicker != nil {
+		c.announcementTicker.Stop()
+		c.announcementTicker = nil
 	}
 
 	// Отменяем контекст
@@ -506,35 +525,90 @@ func (c *CoreController) FindProvidersForContent(contentID string) ([]peer.AddrI
 		return nil, fmt.Errorf("DiscoveryManager недоступен")
 	}
 
-	// Используем routing.RoutingDiscovery - это правильный высокоуровневый способ
-	routingDiscovery := c.discovery.GetRoutingDiscovery()
-	if routingDiscovery == nil {
-		return nil, fmt.Errorf("RoutingDiscovery недоступен")
+	// Получаем DHT напрямую
+	dht := c.discovery.GetDHT()
+	if dht == nil {
+		return nil, fmt.Errorf("DHT недоступен")
 	}
 
-	findCtx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
-	defer cancel()
+	Info("🔍 Начинаем поиск провайдеров в DHT...")
+	Info("📢 ContentID для поиска: %s", contentID)
+	Info("🆔 Наш Peer ID: %s", c.node.GetHost().ID().String())
 
-	// FindPeers возвращает <-chan peer.AddrInfo - правильный тип!
-	peersChan, err := routingDiscovery.FindPeers(findCtx, contentID)
-	if err != nil {
-		return nil, fmt.Errorf("ошибка при поиске провайдеров в DHT: %w", err)
+	// Детальная диагностика DHT состояния
+	Info("🌐 Наши адреса: %v", c.node.GetHost().Addrs())
+	Info("🔗 Количество активных соединений: %d", len(c.node.GetHost().Network().Conns()))
+	Info("📊 Размер DHT routing table: %d", c.GetDHTRoutingTableSize())
+
+	// Проверяем подключение к bootstrap узлам
+	bootstrapPeers := []string{
+		"QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
+		"QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
+		"QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
 	}
-
-	var providers []peer.AddrInfo
-	for peerInfo := range peersChan {
-		// Мы не хотим возвращать адрес самого себя, если нашли
-		if peerInfo.ID != c.node.GetHost().ID() {
-			providers = append(providers, peerInfo)
+	for _, bpID := range bootstrapPeers {
+		if bpPeerID, err := peer.Decode(bpID); err == nil {
+			if c.node.GetHost().Network().Connectedness(bpPeerID) == network.Connected {
+				Info("✅ Подключен к bootstrap узлу: %s", bpID)
+			} else {
+				Info("❌ НЕ подключен к bootstrap узлу: %s", bpID)
+			}
 		}
 	}
 
-	if len(providers) == 0 {
+	// Декодируем ContentID в CID
+	cid, err := cid.Decode(contentID)
+	if err != nil {
+		Error("❌ Ошибка декодирования ContentID: %v", err)
+		return nil, fmt.Errorf("ошибка декодирования ContentID: %w", err)
+	}
+
+	Info("🔑 Декодированный CID: %s", cid.String())
+	Info("📡 Используем прямой DHT API для поиска")
+	Info("⏱️ Таймаут поиска: 60 секунд")
+
+	findCtx, cancel := context.WithTimeout(c.ctx, 60*time.Second) // Увеличиваем таймаут
+	defer cancel()
+
+	// Используем прямой DHT API вместо routingDiscovery
+	Info("🔎 Вызываем dht.FindProviders напрямую...")
+	providers, err := dht.FindProviders(findCtx, cid)
+	if err != nil {
+		Error("❌ Ошибка при поиске провайдеров в DHT: %v", err)
+		return nil, fmt.Errorf("ошибка при поиске провайдеров в DHT: %w", err)
+	}
+
+	Info("📡 Поиск завершен, обрабатываем результаты...")
+	Info("📊 Найдено провайдеров: %d", len(providers))
+
+	// Фильтруем провайдеров, исключая себя
+	var validProviders []peer.AddrInfo
+	for i, peerInfo := range providers {
+		Info("🔍 Найден пир #%d: %s", i+1, peerInfo.ID.String())
+		Info("📍 Адреса пира: %v", peerInfo.Addrs)
+
+		// Мы не хотим возвращать адрес самого себя, если нашли
+		if peerInfo.ID != c.node.GetHost().ID() {
+			validProviders = append(validProviders, peerInfo)
+			Info("✅ Пир %s добавлен в список провайдеров", peerInfo.ID.ShortString())
+		} else {
+			Info("⚠️ Пропускаем себя (Peer ID совпадает)")
+		}
+	}
+
+	Info("📊 Фильтрация завершена. Валидных провайдеров: %d", len(validProviders))
+
+	if len(validProviders) == 0 {
+		Warn("⚠️ Провайдеры для контента '%s' не найдены", contentID)
 		return nil, fmt.Errorf("провайдеры для контента '%s' не найдены", contentID)
 	}
 
-	Info("SUCCESS: Найдены провайдеры для контента %s", contentID)
-	return providers, nil
+	Info("✅ SUCCESS: Найдены провайдеры для контента %s", contentID)
+	for i, provider := range validProviders {
+		Info("📋 Провайдер #%d: %s (%v)", i+1, provider.ID.ShortString(), provider.Addrs)
+	}
+
+	return validProviders, nil
 }
 
 // ProvideContent анонсирует текущий узел как провайдера контента в DHT
@@ -550,20 +624,54 @@ func (c *CoreController) ProvideContent(contentID string) error {
 		return fmt.Errorf("DiscoveryManager недоступен")
 	}
 
-	// Используем routing.RoutingDiscovery для анонсирования
-	routingDiscovery := c.discovery.GetRoutingDiscovery()
-	if routingDiscovery == nil {
-		return fmt.Errorf("RoutingDiscovery недоступен")
+	// Получаем DHT напрямую
+	dht := c.discovery.GetDHT()
+	if dht == nil {
+		return fmt.Errorf("DHT недоступен")
 	}
 
-	// Анонсируем себя как провайдера для данного contentID
-	// Это создаст "точку встречи" в DHT для поиска
-	_, err := routingDiscovery.Advertise(c.ctx, contentID)
+	Info("🔍 Начинаем анонсирование в DHT...")
+	Info("📢 ContentID для анонсирования: %s", contentID)
+	Info("🆔 Наш Peer ID: %s", c.node.GetHost().ID().String())
+	Info("🌐 Наши адреса: %v", c.node.GetHost().Addrs())
+
+	// Декодируем ContentID в CID
+	cid, err := cid.Decode(contentID)
 	if err != nil {
+		Error("❌ Ошибка декодирования ContentID: %v", err)
+		return fmt.Errorf("ошибка декодирования ContentID: %w", err)
+	}
+
+	Info("🔑 Декодированный CID: %s", cid.String())
+
+	// Анонсируем себя как провайдера для данного CID
+	// Используем прямой DHT API вместо routingDiscovery
+	provideCtx, cancel := context.WithTimeout(c.ctx, 60*time.Second) // Даем больше времени
+	defer cancel()
+
+	Info("📡 Вызываем dht.Provide напрямую...")
+	err = dht.Provide(provideCtx, cid, true) // true = анонсировать
+	if err != nil {
+		Error("❌ Ошибка при анонсировании контента в DHT: %v", err)
 		return fmt.Errorf("ошибка при анонсировании контента в DHT: %w", err)
 	}
 
-	Info("SUCCESS: Узел %s анонсирован как провайдер для контента %s", c.node.GetHost().ID().ShortString(), contentID)
+	Info("✅ SUCCESS: Узел %s анонсирован как провайдер для контента %s", c.node.GetHost().ID().ShortString(), contentID)
+	Info("🌍 Анонсирование завершено! Теперь другие пиры могут найти нас по ContentID: %s", contentID)
+
+	// Сохраняем информацию об анонсе для периодического повторения
+	c.lastContentID = contentID
+	c.lastAnnounceTime = time.Now()
+
+	// Запускаем периодическое анонсирование
+	c.startPeriodicAnnouncement()
+
+	// Проверяем статус DHT
+	rt := dht.RoutingTable()
+	if rt != nil {
+		Info("📊 DHT Routing Table: %d пиров", rt.Size())
+	}
+
 	return nil
 }
 
@@ -723,6 +831,25 @@ func (c *CoreController) GetRoutingTableStats() map[string]interface{} {
 	return c.discovery.GetRoutingTableStats()
 }
 
+// GetDHTRoutingTableSize возвращает размер DHT routing table для отладки
+func (c *CoreController) GetDHTRoutingTableSize() int {
+	if c.discovery == nil {
+		return 0
+	}
+
+	dht := c.discovery.GetDHT()
+	if dht == nil {
+		return 0
+	}
+
+	rt := dht.RoutingTable()
+	if rt == nil {
+		return 0
+	}
+
+	return rt.Size()
+}
+
 // IsRunning проверяет, запущен ли контроллер
 func (c *CoreController) IsRunning() bool {
 	c.mu.RLock()
@@ -761,4 +888,80 @@ func (c *CoreController) GetNextEvent() string {
 	}
 
 	return string(jsonData)
+}
+
+// startPeriodicAnnouncement запускает периодическое повторное анонсирование
+func (c *CoreController) startPeriodicAnnouncement() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Останавливаем предыдущий ticker если есть
+	if c.announcementTicker != nil {
+		c.announcementTicker.Stop()
+	}
+
+	// Создаем новый ticker для анонсирования каждые 5 минут
+	c.announcementTicker = time.NewTicker(5 * time.Minute)
+
+	go func() {
+		for {
+			select {
+			case <-c.announcementTicker.C:
+				c.repeatAnnouncement()
+			case <-c.ctx.Done():
+				return
+			}
+		}
+	}()
+
+	Info("🔄 Запущено периодическое анонсирование каждые 5 минут")
+}
+
+// repeatAnnouncement повторяет анонс контента
+func (c *CoreController) repeatAnnouncement() {
+	c.mu.RLock()
+	if c.lastContentID == "" {
+		c.mu.RUnlock()
+		return
+	}
+	contentID := c.lastContentID
+	c.mu.RUnlock()
+
+	Info("🔄 Повторное анонсирование контента: %s", contentID)
+
+	// Получаем DHT
+	if c.discovery == nil {
+		Warn("⚠️ DiscoveryManager недоступен для повторного анонсирования")
+		return
+	}
+
+	dht := c.discovery.GetDHT()
+	if dht == nil {
+		Warn("⚠️ DHT недоступен для повторного анонсирования")
+		return
+	}
+
+	// Декодируем ContentID
+	cid, err := cid.Decode(contentID)
+	if err != nil {
+		Error("❌ Ошибка декодирования ContentID для повторного анонсирования: %v", err)
+		return
+	}
+
+	// Повторяем анонс
+	provideCtx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
+	defer cancel()
+
+	err = dht.Provide(provideCtx, cid, true)
+	if err != nil {
+		Error("❌ Ошибка при повторном анонсировании: %v", err)
+		return
+	}
+
+	// Обновляем время последнего анонса
+	c.mu.Lock()
+	c.lastAnnounceTime = time.Now()
+	c.mu.Unlock()
+
+	Info("✅ Повторное анонсирование успешно завершено")
 }

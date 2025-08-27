@@ -14,9 +14,9 @@ int StopOwlWhisper();
 char* GenerateNewKeyPair();
 char* GenerateNewKeyBytes();
 
-// Отправка сообщений
-int SendMessage(char* text);
-int SendMessageToPeer(char* peerID, char* text);
+// Отправка данных
+int SendData(char* data, int dataLength);
+int SendDataToPeer(char* peerID, char* data, int dataLength);
 
 // Получение информации
 char* GetMyPeerID();
@@ -48,9 +48,13 @@ char* FindPeer(char* peerID);
 char* FindProvidersForContent(char* contentID);
 char* GetNetworkStats();
 char* GetConnectionQuality(char* peerID);
+int GetDHTRoutingTableSize();
 
 // Анонсирование контента
 int ProvideContent(char* contentID);
+
+// Поиск провайдеров контента в DHT
+char* FindProvidersForContent(char* contentID);
 
 // События - единственный канал асинхронной связи с клиентом
 char* GetNextEvent();
