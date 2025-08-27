@@ -198,18 +198,15 @@ func StopOwlWhisper() C.int {
 	return C.int(0) // Успех
 }
 
-//export SendMessage
-func SendMessage(text *C.char) C.int {
+//export SendData
+func SendData(data *C.char, dataLength C.int) C.int {
 	if globalController == nil {
 		return -1
 	}
 
-	goText := C.GoString(text)
+	goData := C.GoBytes(unsafe.Pointer(data), dataLength)
 
-	// Создаем простое сообщение
-	message := []byte(goText)
-
-	err := globalController.Broadcast(message)
+	err := globalController.Broadcast(goData)
 	if err != nil {
 		return -1
 	}
@@ -217,14 +214,14 @@ func SendMessage(text *C.char) C.int {
 	return 0
 }
 
-//export SendMessageToPeer
-func SendMessageToPeer(peerID, text *C.char) C.int {
+//export SendDataToPeer
+func SendDataToPeer(peerID *C.char, data *C.char, dataLength C.int) C.int {
 	if globalController == nil {
 		return -1
 	}
 
 	goPeerID := C.GoString(peerID)
-	goText := C.GoString(text)
+	goData := C.GoBytes(unsafe.Pointer(data), dataLength)
 
 	// Парсим PeerID
 	peer, err := peer.Decode(goPeerID)
@@ -232,9 +229,8 @@ func SendMessageToPeer(peerID, text *C.char) C.int {
 		return -1
 	}
 
-	// Отправляем сообщение
-	message := []byte(goText)
-	err = globalController.Send(peer, message)
+	// Отправляем данные
+	err = globalController.Send(peer, goData)
 	if err != nil {
 		return -1
 	}
@@ -760,6 +756,16 @@ func GetRoutingTableStats() *C.char {
 	return allocString(string(data))
 }
 
+//export GetDHTRoutingTableSize
+func GetDHTRoutingTableSize() C.int {
+	if globalController == nil {
+		return C.int(0)
+	}
+
+	size := globalController.GetDHTRoutingTableSize()
+	return C.int(size)
+}
+
 //export FindProvidersForContent
 func FindProvidersForContent(contentID *C.char) *C.char {
 	if contentID == nil {
@@ -798,20 +804,20 @@ func FindProvidersForContent(contentID *C.char) *C.char {
 //export ProvideContent
 func ProvideContent(contentID *C.char) C.int {
 	if contentID == nil {
-		return C.int(0)
+		return C.int(-1)
 	}
 
 	contentIDStr := C.GoString(contentID)
 	if contentIDStr == "" {
-		return C.int(0)
+		return C.int(-1)
 	}
 
 	err := globalController.ProvideContent(contentIDStr)
 	if err != nil {
-		return C.int(0)
+		return C.int(-1)
 	}
 
-	return C.int(1)
+	return C.int(0)
 }
 
 //export GetNextEvent

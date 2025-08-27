@@ -7,10 +7,12 @@ import (
 	"time"
 
 	"github.com/libp2p/go-libp2p"
+	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+
 	"github.com/multiformats/go-multiaddr"
 )
 
@@ -165,6 +167,41 @@ func NewNodeWithKey(ctx context.Context, privKey crypto.PrivKey, persistence *Pe
 		libp2p.EnableNATService(),
 		libp2p.EnableHolePunching(),
 		libp2p.EnableRelay(),
+
+		// --- ИСПРАВЛЕННАЯ И АКТУАЛЬНАЯ КОНФИГУРАЦИЯ AUTORELAY ---
+
+		// 1. Включаем AutoRelay, используя стандартные bootstrap-узлы как кандидатов в ретрансляторы.
+		// Это и есть правильный, современный способ.
+		libp2p.EnableAutoRelayWithPeerSource(func(ctx context.Context, numPeers int) <-chan peer.AddrInfo {
+			r := make(chan peer.AddrInfo)
+			go func() {
+				defer close(r)
+				// Используем стандартные bootstrap-узлы из библиотеки
+				// Это гарантирует актуальность списка
+				for _, addr := range dht.DefaultBootstrapPeers {
+					select {
+					case <-ctx.Done():
+						return
+					default:
+						addrInfo, err := peer.AddrInfoFromP2pAddr(addr)
+						if err != nil {
+							Warn("⚠️ Не удалось распарсить bootstrap-адрес: %v", err)
+							continue
+						}
+						select {
+						case r <- *addrInfo:
+						case <-ctx.Done():
+							return
+						}
+					}
+				}
+			}()
+			return r
+		}),
+
+		// 2. Форсируем режим "публичной достижимости". Это говорит libp2p
+		// не анонсировать в DHT наши бесполезные локальные адреса (192.168...)
+		libp2p.ForceReachabilityPublic(),
 	}
 
 	h, err := libp2p.New(opts...)
