@@ -79,6 +79,11 @@ type NodeConfig struct {
 	// NAT Reachability
 	ForceReachabilityPublic  bool
 	ForceReachabilityPrivate bool
+
+	// Таймауты для стримов
+	StreamCreationTimeout time.Duration
+	StreamReadTimeout     time.Duration
+	StreamWriteTimeout    time.Duration
 }
 
 // DefaultNodeConfig возвращает дефолтную конфигурацию на основе рабочего poc.go
@@ -111,6 +116,9 @@ func DefaultNodeConfig() *NodeConfig {
 		},
 		ForceReachabilityPublic:  true,
 		ForceReachabilityPrivate: false,
+		StreamCreationTimeout:    60 * time.Second, // как в poc.go
+		StreamReadTimeout:        30 * time.Second,
+		StreamWriteTimeout:       10 * time.Second,
 	}
 }
 
@@ -377,7 +385,7 @@ func NewNodeWithKeyAndConfig(ctx context.Context, privKey crypto.PrivKey, persis
 		protectedPeers: make(map[peer.ID]bool),
 		connManager:    h.ConnManager(),
 		eventManager:   NewEventManager(1000), // Очередь на 1000 событий
-		streamHandler:  NewStreamHandler(h, PROTOCOL_ID),
+		streamHandler:  NewStreamHandler(h, PROTOCOL_ID, config),
 	}
 
 	// Инициализируем менеджер автопереподключения
@@ -929,6 +937,32 @@ func (n *Node) SetStreamOpenCallback(callback func(peer.ID, network.Stream)) {
 func (n *Node) SetStreamCloseCallback(callback func(peer.ID)) {
 	if n.streamHandler != nil {
 		n.streamHandler.SetStreamCloseCallback(callback)
+	}
+}
+
+// CreateStreamWithDefaultTimeout создает стрим с дефолтным таймаутом из конфига
+func (n *Node) CreateStreamWithDefaultTimeout(ctx context.Context, peerID peer.ID) (network.Stream, error) {
+	if n.streamHandler == nil {
+		return nil, fmt.Errorf("StreamHandler недоступен")
+	}
+	return n.streamHandler.CreateStream(ctx, peerID, 0) // 0 = использовать дефолт из конфига
+}
+
+// GetStreamTimeouts возвращает текущие настройки таймаутов для стримов
+func (n *Node) GetStreamTimeouts() map[string]time.Duration {
+	if n.streamHandler == nil || n.streamHandler.config == nil {
+		return map[string]time.Duration{
+			"creation": 60 * time.Second,
+			"read":     30 * time.Second,
+			"write":    10 * time.Second,
+		}
+	}
+
+	config := n.streamHandler.config
+	return map[string]time.Duration{
+		"creation": config.StreamCreationTimeout,
+		"read":     config.StreamReadTimeout,
+		"write":    config.StreamWriteTimeout,
 	}
 }
 
