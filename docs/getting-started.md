@@ -51,12 +51,61 @@ owlwhisper.FindPeersOnce.argtypes = [ctypes.c_char_p]
 owlwhisper.FindPeersOnce.restype = ctypes.c_char_p
 owlwhisper.AdvertiseOnce.argtypes = [ctypes.c_char_p]
 owlwhisper.AdvertiseOnce.restype = ctypes.c_int
+
+# Функции конфигурации узла
+owlwhisper.StartOwlWhisperWithDefaultConfig.restype = ctypes.c_int
+owlwhisper.StartOwlWhisperWithCustomConfig.argtypes = [ctypes.c_char_p]
+owlwhisper.StartOwlWhisperWithCustomConfig.restype = ctypes.c_int
+owlwhisper.GetCurrentNodeConfig.restype = ctypes.c_char_p
+owlwhisper.UpdateNodeConfig.argtypes = [ctypes.c_char_p]
+owlwhisper.UpdateNodeConfig.restype = ctypes.c_int
 ```
 
 ## 🚀 **Базовое использование**
 
 ### **1. Запуск Owl Whisper**
 
+#### **Вариант A: Запуск с дефолтным конфигом**
+```python
+# Запуск с дефолтным конфигом (все транспорты включены)
+result = owlwhisper.StartOwlWhisperWithDefaultConfig()
+if result == 0:
+    print("✅ Owl Whisper запущен с дефолтным конфигом")
+else:
+    print("❌ Ошибка запуска Owl Whisper")
+    exit(1)
+```
+
+#### **Вариант B: Запуск с кастомным конфигом**
+```python
+import json
+
+# Кастомная конфигурация (только TCP + QUIC)
+custom_config = {
+    "enableTCP": True,
+    "enableQUIC": True,
+    "enableWebSocket": False,  # Отключаем WebSocket
+    "enableWebRTC": False,     # Отключаем WebRTC
+    "enableNoise": True,
+    "enableTLS": True,
+    "enableDHT": True,
+    "enableMDNS": True,
+    "listenAddresses": [
+        "/ip4/0.0.0.0/tcp/0",
+        "/ip4/0.0.0.0/udp/0/quic-v1"
+    ]
+}
+
+config_json = json.dumps(custom_config)
+result = owlwhisper.StartOwlWhisperWithCustomConfig(config_json.encode('utf-8'))
+if result == 0:
+    print("✅ Owl Whisper запущен с кастомным конфигом")
+else:
+    print("❌ Ошибка запуска Owl Whisper")
+    exit(1)
+```
+
+#### **Вариант C: Запуск с автоматически сгенерированным ключом (старый способ)**
 ```python
 # Запуск с автоматически сгенерированным ключом
 result = owlwhisper.StartOwlWhisper()
@@ -110,6 +159,22 @@ if peers_ptr:
         print(f"   - {peer['id']}")
     
     owlwhisper.FreeString(peers_ptr)
+
+# Получение текущей конфигурации узла
+config_ptr = owlwhisper.GetCurrentNodeConfig()
+if config_ptr:
+    config_json = ctypes.string_at(config_ptr).decode()
+    config = json.loads(config_json)
+    
+    print(f"⚙️ Конфигурация узла:")
+    print(f"   TCP: {'✅' if config.get('enableTCP') else '❌'}")
+    print(f"   QUIC: {'✅' if config.get('enableQUIC') else '❌'}")
+    print(f"   WebSocket: {'✅' if config.get('enableWebSocket') else '❌'}")
+    print(f"   WebRTC: {'✅' if config.get('enableWebRTC') else '❌'}")
+    print(f"   DHT: {'✅' if config.get('enableDHT') else '❌'}")
+    print(f"   mDNS: {'✅' if config.get('enableMDNS') else '❌'}")
+    
+    owlwhisper.FreeString(config_ptr)
 ```
 
 ### **4. Универсальный обмен данными**
@@ -128,6 +193,18 @@ if result == 0:
     print("✅ Сообщение отправлено")
 else:
     print("❌ Ошибка отправки сообщения")
+
+# Обновление конфигурации узла на лету
+updated_config = {
+    "enableWebSocket": True,  # Включаем WebSocket
+    "streamCreationTimeout": 120  # Увеличиваем таймаут
+}
+config_json = json.dumps(updated_config)
+result = owlwhisper.UpdateNodeConfig(config_json.encode('utf-8'))
+if result == 0:
+    print("✅ Конфигурация обновлена")
+else:
+    print("❌ Ошибка обновления конфигурации")
 
 # Отправка файла
 with open("document.pdf", "rb") as f:
@@ -309,13 +386,7 @@ print("🚀 Слушатель событий запущен")
 ### **Отправка данных**
 
 ```python
-# Создание потока к пиру
-peer_id = "12D3KooW...".encode('utf-8')
-result = owlwhisper.CreateStream(peer_id)
-if result == 0:
-    print("✅ Поток создан")
-
-# Отправка текстового сообщения
+# Отправка текстового сообщения (соединение создается автоматически)
 message = "Привет, мир!".encode('utf-8')
 result = owlwhisper.Send(peer_id, message, len(message))
 if result == 0:
