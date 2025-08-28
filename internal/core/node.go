@@ -309,6 +309,9 @@ type Node struct {
 
 	// EventManager для управления событиями
 	eventManager *EventManager
+
+	// StreamHandler для обработки стримов и чата
+	streamHandler *StreamHandler
 }
 
 // NewNode создает новый libp2p узел (для обратной совместимости)
@@ -374,6 +377,7 @@ func NewNodeWithKeyAndConfig(ctx context.Context, privKey crypto.PrivKey, persis
 		protectedPeers: make(map[peer.ID]bool),
 		connManager:    h.ConnManager(),
 		eventManager:   NewEventManager(1000), // Очередь на 1000 событий
+		streamHandler:  NewStreamHandler(h, PROTOCOL_ID),
 	}
 
 	// Инициализируем менеджер автопереподключения
@@ -382,8 +386,7 @@ func NewNodeWithKeyAndConfig(ctx context.Context, privKey crypto.PrivKey, persis
 	node.reconnectManager.maxAttempts = MAX_RECONNECT_ATTEMPTS
 	node.reconnectManager.attempts = make(map[peer.ID]int)
 
-	// Устанавливаем обработчик потоков
-	h.SetStreamHandler(PROTOCOL_ID, node.handleStream)
+	// StreamHandler уже инициализирован в структуре Node
 
 	// Добавляем логирование сетевых событий
 	h.Network().Notify(&NetworkEventLogger{node: node})
@@ -881,21 +884,52 @@ func (n *Node) attemptReconnect(peerID peer.ID) {
 
 // Send отправляет данные конкретному пиру
 func (n *Node) Send(peerID peer.ID, data []byte) error {
-	// Открываем поток к пиру
-	stream, err := n.host.NewStream(n.ctx, peerID, PROTOCOL_ID)
-	if err != nil {
-		return fmt.Errorf("не удалось открыть поток к %s: %w", peerID.ShortString(), err)
+	if n.streamHandler == nil {
+		return fmt.Errorf("StreamHandler недоступен")
 	}
-	defer stream.Close()
+	return n.streamHandler.Send(peerID, data)
+}
 
-	// Отправляем данные
-	_, err = stream.Write(data)
-	if err != nil {
-		return fmt.Errorf("не удалось отправить данные к %s: %w", peerID.ShortString(), err)
+// GetStreamHandler возвращает StreamHandler для работы со стримами
+func (n *Node) GetStreamHandler() *StreamHandler {
+	return n.streamHandler
+}
+
+// CreateStream создает исходящий стрим к пиру
+func (n *Node) CreateStream(ctx context.Context, peerID peer.ID, timeout time.Duration) (network.Stream, error) {
+	if n.streamHandler == nil {
+		return nil, fmt.Errorf("StreamHandler недоступен")
 	}
+	return n.streamHandler.CreateStream(ctx, peerID, timeout)
+}
 
-	Info("📤 Отправлено %d байт к %s", len(data), peerID.ShortString())
-	return nil
+// CreateStreamWithRetry создает стрим с повторными попытками
+func (n *Node) CreateStreamWithRetry(ctx context.Context, peerID peer.ID, timeout time.Duration, maxRetries int) (network.Stream, error) {
+	if n.streamHandler == nil {
+		return nil, fmt.Errorf("StreamHandler недоступен")
+	}
+	return n.streamHandler.CreateStreamWithRetry(ctx, peerID, timeout, maxRetries)
+}
+
+// SetMessageCallback устанавливает callback для входящих сообщений
+func (n *Node) SetMessageCallback(callback func(peer.ID, []byte)) {
+	if n.streamHandler != nil {
+		n.streamHandler.SetMessageCallback(callback)
+	}
+}
+
+// SetStreamOpenCallback устанавливает callback для открытия стримов
+func (n *Node) SetStreamOpenCallback(callback func(peer.ID, network.Stream)) {
+	if n.streamHandler != nil {
+		n.streamHandler.SetStreamOpenCallback(callback)
+	}
+}
+
+// SetStreamCloseCallback устанавливает callback для закрытия стримов
+func (n *Node) SetStreamCloseCallback(callback func(peer.ID)) {
+	if n.streamHandler != nil {
+		n.streamHandler.SetStreamCloseCallback(callback)
+	}
 }
 
 // Broadcast отправляет данные всем подключенным пирам
