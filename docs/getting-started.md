@@ -1,6 +1,6 @@
 # 🚀 **Быстрый старт с Owl Whisper Core**
 
-**Последнее обновление:** 23 августа 2025
+**Последнее обновление:** 28 августа 2025
 
 ## 📦 **Установка**
 
@@ -38,6 +38,19 @@ owlwhisper.GetNextEvent.restype = ctypes.c_char_p
 
 # Функции управления памятью
 owlwhisper.FreeString.argtypes = [ctypes.c_char_p]
+
+# Новые функции v1.5
+owlwhisper.Connect.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+owlwhisper.Connect.restype = ctypes.c_int
+owlwhisper.SetupAutoRelayWithDHT.restype = ctypes.c_int
+owlwhisper.StartAggressiveDiscovery.argtypes = [ctypes.c_char_p]
+owlwhisper.StartAggressiveDiscovery.restype = ctypes.c_int
+owlwhisper.StartAggressiveAdvertising.argtypes = [ctypes.c_char_p]
+owlwhisper.StartAggressiveAdvertising.restype = ctypes.c_int
+owlwhisper.FindPeersOnce.argtypes = [ctypes.c_char_p]
+owlwhisper.FindPeersOnce.restype = ctypes.c_char_p
+owlwhisper.AdvertiseOnce.argtypes = [ctypes.c_char_p]
+owlwhisper.AdvertiseOnce.restype = ctypes.c_int
 ```
 
 ## 🚀 **Базовое использование**
@@ -311,14 +324,55 @@ except Exception as e:
     print(f"❌ Исключение: {e}")
 ```
 
+## 🆕 **Новые функции v1.5**
+
+### **Агрессивное Discovery и Advertising**
+
+```python
+# Запуск агрессивного поиска пиров
+result = owlwhisper.StartAggressiveDiscovery("my-rendezvous")
+if result == 0:
+    print("✅ Агрессивный поиск запущен")
+
+# Запуск агрессивного анонсирования
+result = owlwhisper.StartAggressiveAdvertising("my-rendezvous")
+if result == 0:
+    print("✅ Агрессивное анонсирование запущено")
+
+# Однократный поиск пиров
+peers_ptr = owlwhisper.FindPeersOnce("my-rendezvous")
+if peers_ptr:
+    peers_json = ctypes.string_at(peers_ptr).decode()
+    peers = json.loads(peers_json)
+    print(f"Найдено пиров: {len(peers)}")
+    owlwhisper.FreeString(peers_ptr)
+```
+
+### **Улучшенное подключение к пирам**
+
+```python
+# Настройка AutoRelay с DHT
+result = owlwhisper.SetupAutoRelayWithDHT()
+if result == 0:
+    print("✅ AutoRelay с DHT настроен")
+
+# Подключение к пиру по адресам
+addrs_json = '["/ip4/192.168.1.100/tcp/1234"]'
+result = owlwhisper.Connect("12D3KooW...", addrs_json)
+if result == 0:
+    print("✅ Успешно подключились к пиру")
+```
+
 ## 🔗 **Следующие шаги**
 
 1. **Изучите справочник функций** - см. [functions/](./functions/) папку
 2. **Настройте логирование** - см. [Утилиты](./functions/utilities.md)
 3. **Управляйте соединениями** - см. [Управление соединениями](./functions/connection-management.md)
 4. **Интегрируйте события** - см. [Система событий](./functions/events-system.md)
+5. **Используйте агрессивное discovery** - см. [Агрессивное Discovery](./functions/aggressive-discovery.md)
+6. **Подключайтесь к пирам** - см. [Подключение к пирам](./functions/peer-connection.md)
 
 ---
 
-**Последнее обновление:** 23 августа 2025  
+**Последнее обновление:** 28 августа 2025  
 **Автор:** Core Development Team 
