@@ -20,13 +20,17 @@ type StreamHandler struct {
 	onMessage     func(peer.ID, []byte)
 	onStreamOpen  func(peer.ID, network.Stream)
 	onStreamClose func(peer.ID)
+
+	// Конфигурация таймаутов
+	config *NodeConfig
 }
 
 // NewStreamHandler создает новый обработчик стримов
-func NewStreamHandler(host host.Host, protocolID string) *StreamHandler {
+func NewStreamHandler(host host.Host, protocolID string, config *NodeConfig) *StreamHandler {
 	handler := &StreamHandler{
 		host:       host,
 		protocolID: protocol.ID(protocolID),
+		config:     config,
 	}
 
 	// Регистрируем обработчик стримов
@@ -166,6 +170,11 @@ func (cs *ChatSession) IsClosed() bool {
 
 // CreateStream создает исходящий стрим к пиру (аналог NewStream из poc.go)
 func (sh *StreamHandler) CreateStream(ctx context.Context, peerID peer.ID, timeout time.Duration) (network.Stream, error) {
+	// Используем таймаут из конфига если не передан
+	if timeout == 0 && sh.config != nil {
+		timeout = sh.config.StreamCreationTimeout
+	}
+
 	// Создаем контекст с таймаутом для создания стрима
 	streamCtx, streamCancel := context.WithTimeout(ctx, timeout)
 	defer streamCancel()

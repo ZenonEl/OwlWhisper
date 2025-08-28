@@ -386,3 +386,94 @@ func (dm *DiscoveryManager) startDHTDiscovery() {
 func (dm *DiscoveryManager) GetRoutingDiscovery() *routing.RoutingDiscovery {
 	return dm.routingDiscovery
 }
+
+// StartAggressiveDiscovery запускает агрессивный поиск пиров (как в poc.go)
+func (dm *DiscoveryManager) StartAggressiveDiscovery(rendezvous string) {
+	Info("🚀 Запуск агрессивного поиска пиров по rendezvous: %s", rendezvous)
+
+	go func() {
+		for {
+			select {
+			case <-dm.ctx.Done():
+				return
+			default:
+				peerChan, err := dm.routingDiscovery.FindPeers(dm.ctx, rendezvous)
+				if err != nil {
+					Warn("Ошибка поиска пиров: %v", err)
+					time.Sleep(10 * time.Second)
+					continue
+				}
+
+				for p := range peerChan {
+					if p.ID == dm.host.ID() {
+						continue
+					}
+					Info("Найден пир: %s. Адреса: %v", p.ID, p.Addrs)
+					dm.notifee.HandlePeerFound(p)
+				}
+
+				time.Sleep(15 * time.Second) // Повторяем поиск каждые 15 секунд
+			}
+		}
+	}()
+
+	Info("Поиск пиров запущен. Ожидание...")
+}
+
+// StartAggressiveAdvertising запускает агрессивное анонсирование (как в poc.go)
+func (dm *DiscoveryManager) StartAggressiveAdvertising(rendezvous string) {
+	Info("🚀 Запуск агрессивного анонсирования по rendezvous: %s", rendezvous)
+
+	go func() {
+		for {
+			select {
+			case <-dm.ctx.Done():
+				return
+			default:
+				_, err := dm.routingDiscovery.Advertise(dm.ctx, rendezvous)
+				if err != nil {
+					Warn("Ошибка анонсирования: %v", err)
+				} else {
+					Info("🔄 Анонсировано в DHT: %s", rendezvous)
+				}
+				time.Sleep(15 * time.Second) // Повторяем каждые 15 секунд
+			}
+		}
+	}()
+
+	Info("Анонсирование запущено. Ожидание...")
+}
+
+// FindPeersOnce выполняет однократный поиск пиров
+func (dm *DiscoveryManager) FindPeersOnce(rendezvous string) ([]peer.AddrInfo, error) {
+	Info("🔍 Однократный поиск пиров по rendezvous: %s", rendezvous)
+
+	peerChan, err := dm.routingDiscovery.FindPeers(dm.ctx, rendezvous)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка поиска пиров: %w", err)
+	}
+
+	var peers []peer.AddrInfo
+	for p := range peerChan {
+		if p.ID == dm.host.ID() {
+			continue
+		}
+		peers = append(peers, p)
+		Info("Найден пир: %s. Адреса: %v", p.ID, p.Addrs)
+	}
+
+	return peers, nil
+}
+
+// AdvertiseOnce выполняет однократное анонсирование
+func (dm *DiscoveryManager) AdvertiseOnce(rendezvous string) error {
+	Info("📢 Однократное анонсирование по rendezvous: %s", rendezvous)
+
+	_, err := dm.routingDiscovery.Advertise(dm.ctx, rendezvous)
+	if err != nil {
+		return fmt.Errorf("ошибка анонсирования: %w", err)
+	}
+
+	Info("📢 Анонсировано в DHT: %s", rendezvous)
+	return nil
+}

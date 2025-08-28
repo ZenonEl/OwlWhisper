@@ -94,6 +94,12 @@ type ICoreController interface {
 
 	// События - единственный канал асинхронной связи с клиентом
 	GetNextEvent() string
+
+	// Агрессивное Discovery и анонсирование (как в poc.go)
+	StartAggressiveDiscovery(rendezvous string)
+	StartAggressiveAdvertising(rendezvous string)
+	FindPeersOnce(rendezvous string) ([]peer.AddrInfo, error)
+	AdvertiseOnce(rendezvous string) error
 }
 
 // CoreController реализует ICoreController интерфейс
@@ -1013,4 +1019,38 @@ func (c *CoreController) repeatAnnouncement() {
 	c.mu.Unlock()
 
 	Info("✅ Повторное анонсирование успешно завершено")
+}
+
+// StartAggressiveDiscovery запускает агрессивный поиск пиров (как в poc.go)
+func (c *CoreController) StartAggressiveDiscovery(rendezvous string) {
+	if c.discovery == nil {
+		Warn("⚠️ DiscoveryManager недоступен")
+		return
+	}
+	c.discovery.StartAggressiveDiscovery(rendezvous)
+}
+
+// StartAggressiveAdvertising запускает агрессивное анонсирование (как в poc.go)
+func (c *CoreController) StartAggressiveAdvertising(rendezvous string) {
+	if c.discovery == nil {
+		Warn("⚠️ DiscoveryManager недоступен")
+		return
+	}
+	c.discovery.StartAggressiveAdvertising(rendezvous)
+}
+
+// FindPeersOnce выполняет однократный поиск пиров
+func (c *CoreController) FindPeersOnce(rendezvous string) ([]peer.AddrInfo, error) {
+	if c.discovery == nil {
+		return nil, fmt.Errorf("DiscoveryManager недоступен")
+	}
+	return c.discovery.FindPeersOnce(rendezvous)
+}
+
+// AdvertiseOnce выполняет однократное анонсирование
+func (c *CoreController) AdvertiseOnce(rendezvous string) error {
+	if c.discovery == nil {
+		return fmt.Errorf("DiscoveryManager недоступен")
+	}
+	return c.discovery.AdvertiseOnce(rendezvous)
 }
