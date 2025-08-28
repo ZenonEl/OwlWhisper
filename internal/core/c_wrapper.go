@@ -106,7 +106,6 @@ func StartOwlWhisperWithKey(keyBytes *C.char, keyLength C.int) C.int {
 	// Сохраняем глобальный экземпляр
 	globalController = controller
 	return 0
-	return 0
 }
 
 //export GenerateNewKeyPair
