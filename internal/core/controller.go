@@ -172,6 +172,55 @@ func NewCoreControllerWithKeyBytes(ctx context.Context, keyBytes []byte) (*CoreC
 	return createControllerFromNode(ctx, cancel, node)
 }
 
+// NewCoreControllerWithConfig создает новый Core контроллер с кастомной конфигурацией
+func NewCoreControllerWithConfig(ctx context.Context, config *NodeConfig) (*CoreController, error) {
+	ctx, cancel := context.WithCancel(ctx)
+
+	// Создаем PersistenceManager
+	persistence, err := NewPersistenceManager()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("не удалось создать PersistenceManager: %w", err)
+	}
+
+	// Загружаем или создаем ключ идентичности
+	privKey, err := persistence.LoadOrCreateIdentity()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("не удалось загрузить/создать ключ идентичности: %w", err)
+	}
+
+	// Создаем Node с конфигурацией
+	node, err := NewNodeWithKeyAndConfig(ctx, privKey, persistence, config)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("не удалось создать Node с конфигурацией: %w", err)
+	}
+
+	return createControllerFromNode(ctx, cancel, node)
+}
+
+// NewCoreControllerWithKeyAndConfig создает новый Core контроллер с ключом и конфигурацией
+func NewCoreControllerWithKeyAndConfig(ctx context.Context, privKey crypto.PrivKey, config *NodeConfig) (*CoreController, error) {
+	ctx, cancel := context.WithCancel(ctx)
+
+	// Создаем PersistenceManager
+	persistence, err := NewPersistenceManager()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("не удалось создать PersistenceManager: %w", err)
+	}
+
+	// Создаем Node с ключом и конфигурацией
+	node, err := NewNodeWithKeyAndConfig(ctx, privKey, persistence, config)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("не удалось создать Node с ключом и конфигурацией: %w", err)
+	}
+
+	return createControllerFromNode(ctx, cancel, node)
+}
+
 // createControllerFromNode создает контроллер из готового узла
 func createControllerFromNode(ctx context.Context, cancel context.CancelFunc, node *Node) (*CoreController, error) {
 	// Создаем DiscoveryManager с callback для новых пиров
