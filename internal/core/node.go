@@ -12,6 +12,13 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/p2p/host/autorelay"
+	"github.com/libp2p/go-libp2p/p2p/security/noise"
+	tls "github.com/libp2p/go-libp2p/p2p/security/tls"
+	quic "github.com/libp2p/go-libp2p/p2p/transport/quic"
+	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
+	webrtc "github.com/libp2p/go-libp2p/p2p/transport/webrtc"
+	ws "github.com/libp2p/go-libp2p/p2p/transport/websocket"
 
 	"github.com/multiformats/go-multiaddr"
 )
@@ -22,7 +29,7 @@ const PROTOCOL_ID = "/owl-whisper/1.0.0"
 // Лимиты соединений для ConnectionManager
 const (
 	// Максимальное количество инфраструктурных соединений (bootstrap, DHT, mDNS)
-	MAX_INFRASTRUCTURE_CONNECTIONS = 50
+	MAX_INFRASTRUCTURE_CONNECTIONS = 100
 	// Максимальное количество защищенных соединений (контакты)
 	MAX_PROTECTED_CONNECTIONS = 100
 	// Общий лимит соединений
@@ -36,6 +43,186 @@ const (
 	// Максимальное количество попыток переподключения
 	MAX_RECONNECT_ATTEMPTS = 5
 )
+
+// NodeConfig содержит настройки для создания Node
+type NodeConfig struct {
+	// Транспорты
+	EnableTCP       bool
+	EnableQUIC      bool
+	EnableWebSocket bool
+	EnableWebRTC    bool
+
+	// Шифрование
+	EnableNoise bool
+	EnableTLS   bool
+
+	// NAT и Relay
+	EnableNATPortMap   bool
+	EnableHolePunching bool
+	EnableAutoNATv2    bool
+	EnableRelay        bool
+	EnableAutoRelay    bool
+
+	// Relay настройки
+	StaticRelays           []string
+	UseBootstrapAsRelay    bool
+	AutoRelayBootDelay     time.Duration
+	AutoRelayMaxCandidates int
+
+	// Discovery
+	EnableMDNS bool
+	EnableDHT  bool
+
+	// Порт и адреса
+	ListenAddresses []string
+
+	// NAT Reachability
+	ForceReachabilityPublic  bool
+	ForceReachabilityPrivate bool
+}
+
+// DefaultNodeConfig возвращает дефолтную конфигурацию на основе рабочего poc.go
+func DefaultNodeConfig() *NodeConfig {
+	return &NodeConfig{
+		EnableTCP:              true,
+		EnableQUIC:             true,
+		EnableWebSocket:        true,
+		EnableWebRTC:           true,
+		EnableNoise:            true,
+		EnableTLS:              true,
+		EnableNATPortMap:       true,
+		EnableHolePunching:     true,
+		EnableAutoNATv2:        true,
+		EnableRelay:            true,
+		EnableAutoRelay:        true,
+		UseBootstrapAsRelay:    true,
+		AutoRelayBootDelay:     2 * time.Second,
+		AutoRelayMaxCandidates: 10,
+		EnableMDNS:             true,
+		EnableDHT:              true,
+		ListenAddresses: []string{
+			"/ip4/0.0.0.0/tcp/0",
+			"/ip4/0.0.0.0/tcp/0/ws",
+			"/ip4/0.0.0.0/udp/0/quic-v1",
+			"/ip4/0.0.0.0/udp/0/webrtc-direct",
+		},
+		StaticRelays: []string{
+			"/dns4/relay.dev.svcs.d.foundation/tcp/443/wss/p2p/12D3KooWCKd2fU1g4k15u3J5i6pGk26h3g68d3amEa2S71G5v1jS",
+		},
+		ForceReachabilityPublic:  true,
+		ForceReachabilityPrivate: false,
+	}
+}
+
+// buildLibp2pOptions создает опции libp2p на основе конфигурации
+func buildLibp2pOptions(privKey crypto.PrivKey, config *NodeConfig) []libp2p.Option {
+	opts := []libp2p.Option{
+		libp2p.Identity(privKey),
+	}
+
+	// Добавляем адреса для прослушивания
+	if len(config.ListenAddresses) > 0 {
+		opts = append(opts, libp2p.ListenAddrStrings(config.ListenAddresses...))
+	}
+
+	// Добавляем транспорты
+	if config.EnableTCP {
+		opts = append(opts, libp2p.Transport(tcp.NewTCPTransport))
+	}
+	if config.EnableQUIC {
+		opts = append(opts, libp2p.Transport(quic.NewTransport))
+	}
+	if config.EnableWebSocket {
+		opts = append(opts, libp2p.Transport(ws.New))
+	}
+	if config.EnableWebRTC {
+		opts = append(opts, libp2p.Transport(webrtc.New))
+	}
+
+	// Добавляем шифрование
+	if config.EnableNoise {
+		opts = append(opts, libp2p.Security(noise.ID, noise.New))
+	}
+	if config.EnableTLS {
+		opts = append(opts, libp2p.Security(tls.ID, tls.New))
+	}
+
+	// Добавляем NAT и hole punching
+	if config.EnableNATPortMap {
+		opts = append(opts, libp2p.NATPortMap())
+	}
+	if config.EnableHolePunching {
+		opts = append(opts, libp2p.EnableHolePunching())
+	}
+	if config.EnableAutoNATv2 {
+		opts = append(opts, libp2p.EnableAutoNATv2())
+	}
+
+	// Добавляем relay настройки
+	if config.EnableRelay {
+		opts = append(opts, libp2p.EnableRelay())
+	}
+
+	// Добавляем autorelay настройки
+	if config.EnableAutoRelay {
+		// Создаем список всех relay узлов: статические + bootstrap
+		var allRelays []peer.AddrInfo
+
+		// Добавляем статические relay
+		for _, addrStr := range config.StaticRelays {
+			pi, err := peer.AddrInfoFromString(addrStr)
+			if err != nil {
+				Warn("⚠️ Не удалось распарсить статический relay-адрес: %v", err)
+				continue
+			}
+			allRelays = append(allRelays, *pi)
+		}
+
+		// Добавляем bootstrap узлы как relay если включено
+		if config.UseBootstrapAsRelay {
+			bootstrapPeers := dht.GetDefaultBootstrapPeerAddrInfos()
+			allRelays = append(allRelays, bootstrapPeers...)
+		}
+
+		// Включаем autorelay с настройками
+		opts = append(opts,
+			libp2p.EnableAutoRelayWithStaticRelays(allRelays),
+			libp2p.EnableAutoRelayWithPeerSource(func(ctx context.Context, numPeers int) <-chan peer.AddrInfo {
+				ch := make(chan peer.AddrInfo)
+				go func() {
+					defer close(ch)
+					// Используем bootstrap узлы как источник пиров для autorelay
+					bootstrapPeers := dht.GetDefaultBootstrapPeerAddrInfos()
+					for _, pi := range bootstrapPeers {
+						if numPeers <= 0 {
+							break
+						}
+						select {
+						case ch <- pi:
+							numPeers--
+						case <-ctx.Done():
+							return
+						}
+					}
+				}()
+				return ch
+			},
+				autorelay.WithBootDelay(config.AutoRelayBootDelay),
+				autorelay.WithMaxCandidates(config.AutoRelayMaxCandidates),
+			),
+		)
+	}
+
+	// Настройки NAT Reachability
+	if config.ForceReachabilityPublic {
+		opts = append(opts, libp2p.ForceReachabilityPublic())
+	}
+	if config.ForceReachabilityPrivate {
+		opts = append(opts, libp2p.ForceReachabilityPrivate())
+	}
+
+	return opts
+}
 
 // NetworkEventLogger логирует сетевые события и отправляет их в EventManager
 type NetworkEventLogger struct {
@@ -154,6 +341,11 @@ func NewNodeWithKeyBytes(ctx context.Context, keyBytes []byte, persistence *Pers
 
 // NewNodeWithKey создает новый libp2p узел с переданным ключом
 func NewNodeWithKey(ctx context.Context, privKey crypto.PrivKey, persistence *PersistenceManager) (*Node, error) {
+	return NewNodeWithKeyAndConfig(ctx, privKey, persistence, DefaultNodeConfig())
+}
+
+// NewNodeWithKeyAndConfig создает новый libp2p узел с переданным ключом и конфигурацией
+func NewNodeWithKeyAndConfig(ctx context.Context, privKey crypto.PrivKey, persistence *PersistenceManager, config *NodeConfig) (*Node, error) {
 	// Получаем PeerID из ключа
 	peerID, err := peer.IDFromPrivateKey(privKey)
 	if err != nil {
@@ -162,47 +354,8 @@ func NewNodeWithKey(ctx context.Context, privKey crypto.PrivKey, persistence *Pe
 
 	Info("🔑 Создаем узел с ключом для PeerID: %s", peerID.String())
 
-	opts := []libp2p.Option{
-		libp2p.Identity(privKey),
-		libp2p.EnableNATService(),
-		libp2p.EnableHolePunching(),
-		libp2p.EnableRelay(),
-
-		// --- ИСПРАВЛЕННАЯ И АКТУАЛЬНАЯ КОНФИГУРАЦИЯ AUTORELAY ---
-
-		// 1. Включаем AutoRelay, используя стандартные bootstrap-узлы как кандидатов в ретрансляторы.
-		// Это и есть правильный, современный способ.
-		libp2p.EnableAutoRelayWithPeerSource(func(ctx context.Context, numPeers int) <-chan peer.AddrInfo {
-			r := make(chan peer.AddrInfo)
-			go func() {
-				defer close(r)
-				// Используем стандартные bootstrap-узлы из библиотеки
-				// Это гарантирует актуальность списка
-				for _, addr := range dht.DefaultBootstrapPeers {
-					select {
-					case <-ctx.Done():
-						return
-					default:
-						addrInfo, err := peer.AddrInfoFromP2pAddr(addr)
-						if err != nil {
-							Warn("⚠️ Не удалось распарсить bootstrap-адрес: %v", err)
-							continue
-						}
-						select {
-						case r <- *addrInfo:
-						case <-ctx.Done():
-							return
-						}
-					}
-				}
-			}()
-			return r
-		}),
-
-		// 2. Форсируем режим "публичной достижимости". Это говорит libp2p
-		// не анонсировать в DHT наши бесполезные локальные адреса (192.168...)
-		libp2p.ForceReachabilityPublic(),
-	}
+	// Создаем опции libp2p на основе конфигурации
+	opts := buildLibp2pOptions(privKey, config)
 
 	h, err := libp2p.New(opts...)
 	if err != nil {
