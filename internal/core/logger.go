@@ -37,7 +37,6 @@ type Logger struct {
 	file    *os.File
 	console io.Writer
 	mu      sync.RWMutex
-	prefix  string
 }
 
 // NewLogger создает новый логгер

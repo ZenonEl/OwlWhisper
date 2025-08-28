@@ -17,6 +17,7 @@ import (
 
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/multiformats/go-multiaddr"
 )
 
 // Глобальный экземпляр CoreController
@@ -642,6 +643,67 @@ func LoadPeerFromCache(peerIDStr *C.char) *C.char {
 	return allocString(string(data))
 }
 
+//export Connect
+func Connect(peerIDStr *C.char, addrsStr *C.char) C.int {
+	if globalController == nil {
+		return C.int(-1)
+	}
+
+	peerID, err := peer.Decode(C.GoString(peerIDStr))
+	if err != nil {
+		return C.int(-1)
+	}
+
+	// Парсим адреса из JSON строки
+	var addrList []string
+	if err := json.Unmarshal([]byte(C.GoString(addrsStr)), &addrList); err != nil {
+		return C.int(-1)
+	}
+
+	// Создаем AddrInfo
+	addrInfo := peer.AddrInfo{
+		ID:    peerID,
+		Addrs: make([]multiaddr.Multiaddr, 0, len(addrList)),
+	}
+
+	for _, addrStr := range addrList {
+		if addr, err := multiaddr.NewMultiaddr(addrStr); err == nil {
+			addrInfo.Addrs = append(addrInfo.Addrs, addr)
+		}
+	}
+
+	// Подключаемся
+	if err := globalController.Connect(addrInfo); err != nil {
+		return C.int(-1)
+	}
+
+	return C.int(0)
+}
+
+//export SetupAutoRelayWithDHT
+func SetupAutoRelayWithDHT() C.int {
+	if globalController == nil {
+		return C.int(-1)
+	}
+
+	// Получаем DHT из discovery manager
+	if globalController.discovery == nil {
+		return C.int(-1)
+	}
+
+	dht := globalController.discovery.GetDHT()
+	if dht == nil {
+		return C.int(-1)
+	}
+
+	// Настраиваем autorelay
+	if err := globalController.SetupAutoRelayWithDHT(dht); err != nil {
+		return C.int(-1)
+	}
+
+	return C.int(0)
+}
+
 //export GetAllCachedPeers
 func GetAllCachedPeers() *C.char {
 	if globalController == nil {
@@ -785,7 +847,7 @@ func FindProvidersForContent(contentID *C.char) *C.char {
 	// Преобразуем []peer.AddrInfo в JSON строку
 	var result []map[string]interface{}
 	for _, provider := range providers {
-		providerInfo := map[string]interface{}{
+		providerInfo := map[string]any{
 			"id":     provider.ID.String(),
 			"addrs":  provider.Addrs,
 			"health": "healthy",
@@ -834,4 +896,87 @@ func GetNextEvent() *C.char {
 
 	// Возвращаем JSON строку события
 	return allocString(eventJSON)
+}
+
+//export StartAggressiveDiscovery
+func StartAggressiveDiscovery(rendezvous *C.char) C.int {
+	if globalController == nil {
+		return C.int(-1)
+	}
+
+	rendezvousStr := C.GoString(rendezvous)
+	if rendezvousStr == "" {
+		return C.int(-1)
+	}
+
+	globalController.StartAggressiveDiscovery(rendezvousStr)
+	return C.int(0)
+}
+
+//export StartAggressiveAdvertising
+func StartAggressiveAdvertising(rendezvous *C.char) C.int {
+	if globalController == nil {
+		return C.int(-1)
+	}
+
+	rendezvousStr := C.GoString(rendezvous)
+	if rendezvousStr == "" {
+		return C.int(-1)
+	}
+
+	globalController.StartAggressiveAdvertising(rendezvousStr)
+	return C.int(0)
+}
+
+//export FindPeersOnce
+func FindPeersOnce(rendezvous *C.char) *C.char {
+	if globalController == nil {
+		return nil
+	}
+
+	rendezvousStr := C.GoString(rendezvous)
+	if rendezvousStr == "" {
+		return nil
+	}
+
+	peers, err := globalController.FindPeersOnce(rendezvousStr)
+	if err != nil {
+		return C.CString(fmt.Sprintf("ERROR: %v", err))
+	}
+
+	// Преобразуем []peer.AddrInfo в JSON строку
+	var result []map[string]interface{}
+	for _, peer := range peers {
+		peerInfo := map[string]any{
+			"id":    peer.ID.String(),
+			"addrs": peer.Addrs,
+		}
+		result = append(result, peerInfo)
+	}
+
+	jsonData, err := json.Marshal(result)
+	if err != nil {
+		return C.CString(fmt.Sprintf("ERROR: не удалось сериализовать результат: %v", err))
+	}
+
+	return allocString(string(jsonData))
+}
+
+//export AdvertiseOnce
+func AdvertiseOnce(rendezvous *C.char) C.int {
+	if globalController == nil {
+		return C.int(-1)
+	}
+
+	rendezvousStr := C.GoString(rendezvous)
+	if rendezvousStr == "" {
+		return C.int(-1)
+	}
+
+	err := globalController.AdvertiseOnce(rendezvousStr)
+	if err != nil {
+		return C.int(-1)
+	}
+
+	return C.int(0)
 }

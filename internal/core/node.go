@@ -12,6 +12,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+
 	"github.com/libp2p/go-libp2p/p2p/host/autorelay"
 	"github.com/libp2p/go-libp2p/p2p/security/noise"
 	tls "github.com/libp2p/go-libp2p/p2p/security/tls"
@@ -84,6 +85,11 @@ type NodeConfig struct {
 	StreamCreationTimeout time.Duration
 	StreamReadTimeout     time.Duration
 	StreamWriteTimeout    time.Duration
+
+	// Дополнительные настройки из poc.go
+	EnableAutoRelayWithStaticRelays bool
+	EnableAutoRelayWithPeerSource   bool
+	ProtocolID                      string
 }
 
 // DefaultNodeConfig возвращает дефолтную конфигурацию на основе рабочего poc.go
@@ -114,11 +120,14 @@ func DefaultNodeConfig() *NodeConfig {
 		StaticRelays: []string{
 			"/dns4/relay.dev.svcs.d.foundation/tcp/443/wss/p2p/12D3KooWCKd2fU1g4k15u3J5i6pGk26h3g68d3amEa2S71G5v1jS",
 		},
-		ForceReachabilityPublic:  true,
-		ForceReachabilityPrivate: false,
-		StreamCreationTimeout:    60 * time.Second, // как в poc.go
-		StreamReadTimeout:        30 * time.Second,
-		StreamWriteTimeout:       10 * time.Second,
+		ForceReachabilityPublic:         true,
+		ForceReachabilityPrivate:        false,
+		StreamCreationTimeout:           60 * time.Second, // как в poc.go
+		StreamReadTimeout:               30 * time.Second,
+		StreamWriteTimeout:              10 * time.Second,
+		EnableAutoRelayWithStaticRelays: true,
+		EnableAutoRelayWithPeerSource:   true,
+		ProtocolID:                      "/p2p-chat/1.0.0", // как в poc.go
 	}
 }
 
@@ -195,29 +204,6 @@ func buildLibp2pOptions(privKey crypto.PrivKey, config *NodeConfig) []libp2p.Opt
 		// Включаем autorelay с настройками
 		opts = append(opts,
 			libp2p.EnableAutoRelayWithStaticRelays(allRelays),
-			libp2p.EnableAutoRelayWithPeerSource(func(ctx context.Context, numPeers int) <-chan peer.AddrInfo {
-				ch := make(chan peer.AddrInfo)
-				go func() {
-					defer close(ch)
-					// Используем bootstrap узлы как источник пиров для autorelay
-					bootstrapPeers := dht.GetDefaultBootstrapPeerAddrInfos()
-					for _, pi := range bootstrapPeers {
-						if numPeers <= 0 {
-							break
-						}
-						select {
-						case ch <- pi:
-							numPeers--
-						case <-ctx.Done():
-							return
-						}
-					}
-				}()
-				return ch
-			},
-				autorelay.WithBootDelay(config.AutoRelayBootDelay),
-				autorelay.WithMaxCandidates(config.AutoRelayMaxCandidates),
-			),
 		)
 	}
 
@@ -826,70 +812,6 @@ func (n *Node) GetRoutingTableStats() map[string]interface{} {
 	return n.discovery.GetRoutingTableStats()
 }
 
-// startReconnectLoop запускает цикл автопереподключения
-func (n *Node) startReconnectLoop() {
-	go func() {
-		ticker := time.NewTicker(n.reconnectManager.interval)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-n.ctx.Done():
-				return
-			case <-ticker.C:
-				n.reconnectProtectedPeers()
-			}
-		}
-	}()
-}
-
-// reconnectProtectedPeers пытается переподключиться к отключенным защищенным пирам
-func (n *Node) reconnectProtectedPeers() {
-	n.reconnectMutex.RLock()
-	enabled := n.reconnectManager.enabled
-	n.reconnectMutex.RUnlock()
-
-	if !enabled {
-		return
-	}
-
-	// Получаем список защищенных пиров
-	protectedPeers := n.GetProtectedPeers()
-
-	for _, peerID := range protectedPeers {
-		// Проверяем, подключен ли пир
-		if !n.IsConnected(peerID) {
-			n.attemptReconnect(peerID)
-		}
-	}
-}
-
-// attemptReconnect пытается переподключиться к конкретному пиру
-func (n *Node) attemptReconnect(peerID peer.ID) {
-	n.reconnectMutex.Lock()
-	attempts := n.reconnectManager.attempts[peerID]
-	maxAttempts := n.reconnectManager.maxAttempts
-	n.reconnectMutex.Unlock()
-
-	if attempts >= maxAttempts {
-		Warn("⚠️ Превышен лимит попыток переподключения к пиру %s (%d/%d)",
-			peerID.ShortString(), attempts, maxAttempts)
-		return
-	}
-
-	Info("🔄 Попытка переподключения к защищенному пиру %s (%d/%d)",
-		peerID.ShortString(), attempts+1, maxAttempts)
-
-	// Здесь должна быть логика переподключения через libp2p
-	// Пока просто увеличиваем счетчик попыток
-	n.reconnectMutex.Lock()
-	n.reconnectManager.attempts[peerID]++
-	n.reconnectMutex.Unlock()
-
-	// TODO: Реализовать реальное переподключение через host.Connect()
-	// Для этого нужно сохранять адреса защищенных пиров
-}
-
 // Send отправляет данные конкретному пиру
 func (n *Node) Send(peerID peer.ID, data []byte) error {
 	if n.streamHandler == nil {
@@ -1030,4 +952,55 @@ func (n *Node) handleStream(stream network.Stream) {
 	}
 
 	stream.Close()
+}
+
+// SetupAutoRelayWithDHT настраивает autorelay с использованием DHT routing table
+func (n *Node) SetupAutoRelayWithDHT(kademliaDHT *dht.IpfsDHT) error {
+	if n.host == nil {
+		return fmt.Errorf("хост недоступен")
+	}
+
+	// Создаем функцию peer source, которая использует DHT routing table
+	peerSource := func(ctx context.Context, numPeers int) <-chan peer.AddrInfo {
+		ch := make(chan peer.AddrInfo)
+		go func() {
+			defer close(ch)
+
+			// Проверяем, инициализирован ли DHT
+			if kademliaDHT == nil {
+				return
+			}
+
+			// Используем routing table самого DHT как источник пиров
+			for _, pi := range kademliaDHT.RoutingTable().ListPeers() {
+				if numPeers <= 0 {
+					break
+				}
+				// Проверяем, есть ли у нас адреса для этого пира
+				addrs := kademliaDHT.Host().Peerstore().Addrs(pi)
+				if len(addrs) > 0 {
+					select {
+					case ch <- peer.AddrInfo{ID: pi, Addrs: addrs}:
+						numPeers--
+					case <-ctx.Done():
+						return
+					}
+				}
+			}
+		}()
+		return ch
+	}
+
+	// Включаем autorelay с peer source
+	if err := n.host.(interface {
+		EnableAutoRelayWithPeerSource(autorelay.PeerSource, ...autorelay.Option) error
+	}).EnableAutoRelayWithPeerSource(peerSource,
+		autorelay.WithBootDelay(n.streamHandler.config.AutoRelayBootDelay),
+		autorelay.WithMaxCandidates(n.streamHandler.config.AutoRelayMaxCandidates),
+	); err != nil {
+		return fmt.Errorf("не удалось включить autorelay с peer source: %w", err)
+	}
+
+	Info("✅ Autorelay с DHT peer source успешно настроен")
+	return nil
 }
