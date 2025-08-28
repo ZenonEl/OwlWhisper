@@ -56,6 +56,10 @@ int ProvideContent(char* contentID);
 // Поиск провайдеров контента в DHT
 char* FindProvidersForContent(char* contentID);
 
+// Новые функции из core API
+int Connect(char* peerID, char* addrs);
+int SetupAutoRelayWithDHT();
+
 // События - единственный канал асинхронной связи с клиентом
 char* GetNextEvent();
 

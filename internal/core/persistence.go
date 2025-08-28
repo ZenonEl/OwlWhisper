@@ -201,7 +201,7 @@ func (pm *PersistenceManager) ClearPeerCache() error {
 // loadPeerCache загружает кэш пиров из файла
 func (pm *PersistenceManager) loadPeerCache() (map[string]PeerCacheEntry, error) {
 	cachePath := filepath.Join(pm.configPath, peerCacheFile)
-	
+
 	data, err := os.ReadFile(cachePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -221,7 +221,7 @@ func (pm *PersistenceManager) loadPeerCache() (map[string]PeerCacheEntry, error)
 // savePeerCache сохраняет кэш пиров в файл
 func (pm *PersistenceManager) savePeerCache(cache map[string]PeerCacheEntry) error {
 	cachePath := filepath.Join(pm.configPath, peerCacheFile)
-	
+
 	data, err := json.MarshalIndent(cache, "", "  ")
 	if err != nil {
 		return fmt.Errorf("не удалось сериализовать кэш пиров: %w", err)
@@ -262,9 +262,7 @@ func (pm *PersistenceManager) SavePeerCache(peers []peer.ID, addresses map[peer.
 		// Добавляем адреса если есть
 		if addrs, exists := addresses[p]; exists {
 			entry.Addresses = make([]string, len(addrs))
-			for i, addr := range addrs {
-				entry.Addresses[i] = addr // addrs уже являются строками
-			}
+			copy(entry.Addresses, addrs)
 		}
 
 		entries = append(entries, entry)

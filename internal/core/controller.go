@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ipfs/go-cid"
+	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -67,6 +68,9 @@ type ICoreController interface {
 	// ProvideContent анонсирует текущий узел как провайдера контента в DHT
 	ProvideContent(contentID string) error
 
+	// Connect подключается к пиру по AddrInfo
+	Connect(addrInfo peer.AddrInfo) error
+
 	// GetConnectionQuality возвращает качество соединения с пиром
 	GetConnectionQuality(peerID peer.ID) map[string]interface{}
 
@@ -100,6 +104,9 @@ type ICoreController interface {
 	StartAggressiveAdvertising(rendezvous string)
 	FindPeersOnce(rendezvous string) ([]peer.AddrInfo, error)
 	AdvertiseOnce(rendezvous string) error
+
+	// Настройка autorelay с DHT
+	SetupAutoRelayWithDHT(kademliaDHT *dht.IpfsDHT) error
 }
 
 // CoreController реализует ICoreController интерфейс
@@ -173,6 +180,34 @@ func NewCoreControllerWithKeyBytes(ctx context.Context, keyBytes []byte) (*CoreC
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("не удалось создать Node с байтами ключа: %w", err)
+	}
+
+	return createControllerFromNode(ctx, cancel, node)
+}
+
+// NewCoreControllerWithKeyBytesAndConfig создает новый Core контроллер с байтами ключа и конфигурацией
+func NewCoreControllerWithKeyBytesAndConfig(ctx context.Context, keyBytes []byte, config *NodeConfig) (*CoreController, error) {
+	ctx, cancel := context.WithCancel(ctx)
+
+	// Создаем PersistenceManager
+	persistence, err := NewPersistenceManager()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("не удалось создать PersistenceManager: %w", err)
+	}
+
+	// Десериализуем ключ из байтов
+	privKey, err := crypto.UnmarshalPrivateKey(keyBytes)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("не удалось десериализовать ключ из байтов: %w", err)
+	}
+
+	// Создаем Node с ключом и конфигурацией
+	node, err := NewNodeWithKeyAndConfig(ctx, privKey, persistence, config)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("не удалось создать Node с ключом и конфигурацией: %w", err)
 	}
 
 	return createControllerFromNode(ctx, cancel, node)
@@ -633,6 +668,26 @@ func (c *CoreController) FindProvidersForContent(contentID string) ([]peer.AddrI
 		return nil, fmt.Errorf("ошибка при поиске провайдеров в DHT: %w", err)
 	}
 
+	// Если провайдеры не найдены, пробуем через routingDiscovery
+	if len(providers) == 0 {
+		Info("🔍 Провайдеры не найдены через DHT, пробуем через routingDiscovery...")
+		if rd := c.discovery.GetRoutingDiscovery(); rd != nil {
+			// Ищем через routingDiscovery
+			peerChan, err := rd.FindPeers(findCtx, contentID)
+			if err != nil {
+				Warn("⚠️ Ошибка поиска через routingDiscovery: %v", err)
+			} else {
+				// Собираем найденных пиров
+				for p := range peerChan {
+					if p.ID != c.node.GetHost().ID() {
+						providers = append(providers, p)
+						Info("🔍 Найден пир через routingDiscovery: %s", p.ID.ShortString())
+					}
+				}
+			}
+		}
+	}
+
 	Info("📡 Поиск завершен, обрабатываем результаты...")
 	Info("📊 Найдено провайдеров: %d", len(providers))
 
@@ -721,12 +776,63 @@ func (c *CoreController) ProvideContent(contentID string) error {
 	// Запускаем периодическое анонсирование
 	c.startPeriodicAnnouncement()
 
+	// Также анонсируемся через routingDiscovery для лучшей видимости
+	if rd := c.discovery.GetRoutingDiscovery(); rd != nil {
+		go func() {
+			// Анонсируемся каждые 30 секунд
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-c.ctx.Done():
+					return
+				case <-ticker.C:
+					Info("📢 Повторное анонсирование через routingDiscovery...")
+					if _, err := rd.Advertise(c.ctx, contentID); err != nil {
+						Warn("⚠️ Ошибка повторного анонса: %v", err)
+					} else {
+						Info("✅ Повторный анонс успешен")
+					}
+				}
+			}
+		}()
+	}
+
 	// Проверяем статус DHT
 	rt := dht.RoutingTable()
 	if rt != nil {
 		Info("📊 DHT Routing Table: %d пиров", rt.Size())
 	}
 
+	return nil
+}
+
+// Connect подключается к пиру по AddrInfo
+func (c *CoreController) Connect(addrInfo peer.AddrInfo) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.node == nil {
+		return fmt.Errorf("узел недоступен")
+	}
+
+	// Проверяем, не подключены ли уже
+	if c.node.IsConnected(addrInfo.ID) {
+		Info("✅ Уже подключены к %s", addrInfo.ID.ShortString())
+		return nil
+	}
+
+	// Подключаемся к пиру
+	connectCtx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
+	defer cancel()
+
+	err := c.node.GetHost().Connect(connectCtx, addrInfo)
+	if err != nil {
+		return fmt.Errorf("ошибка подключения к %s: %w", addrInfo.ID.ShortString(), err)
+	}
+
+	Info("✅ Успешно подключились к %s", addrInfo.ID.ShortString())
 	return nil
 }
 
@@ -1053,4 +1159,12 @@ func (c *CoreController) AdvertiseOnce(rendezvous string) error {
 		return fmt.Errorf("DiscoveryManager недоступен")
 	}
 	return c.discovery.AdvertiseOnce(rendezvous)
+}
+
+// SetupAutoRelayWithDHT настраивает autorelay с использованием DHT routing table
+func (c *CoreController) SetupAutoRelayWithDHT(kademliaDHT *dht.IpfsDHT) error {
+	if c.node == nil {
+		return fmt.Errorf("Node недоступен")
+	}
+	return c.node.SetupAutoRelayWithDHT(kademliaDHT)
 }
