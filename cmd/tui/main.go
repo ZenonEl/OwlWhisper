@@ -4,6 +4,8 @@ import (
 	"log"
 	"os"
 
+	"OwlWhisper/internal/core"
+
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -30,5 +32,6 @@ func NewTUIApp() *TUIApp {
 		profile:       "",
 		peerID:        "",
 		discriminator: "",
+		nodeConfig:    core.DefaultNodeConfig(), // Используем дефолтный конфиг
 	}
 }

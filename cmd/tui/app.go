@@ -21,6 +21,7 @@ type AppState int
 
 const (
 	StateInitializing AppState = iota
+	StateConfigChoice
 	StateProfileInput
 	StateCoreStarting
 	StateReady
@@ -41,6 +42,7 @@ type TUIApp struct {
 	inputBuffer   string
 	commandMode   bool
 	outputLines   []string
+	nodeConfig    *core.NodeConfig // Конфигурация узла
 }
 
 // String возвращает строковое представление состояния
@@ -48,6 +50,8 @@ func (s AppState) String() string {
 	switch s {
 	case StateInitializing:
 		return "Инициализация"
+	case StateConfigChoice:
+		return "Выбор конфигурации"
 	case StateProfileInput:
 		return "Ввод профиля"
 	case StateCoreStarting:
@@ -63,14 +67,16 @@ func (s AppState) String() string {
 
 // Init инициализирует приложение
 func (a *TUIApp) Init() tea.Cmd {
-	// Сразу переходим к вводу профиля
-	a.state = StateProfileInput
+	// Сначала показываем выбор конфигурации
+	a.state = StateConfigChoice
 	return tea.EnterAltScreen
 }
 
 // handleKeyPress обрабатывает нажатия клавиш
 func (a *TUIApp) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch a.state {
+	case StateConfigChoice:
+		return a.handleConfigChoice(msg)
 	case StateProfileInput:
 		return a.handleProfileInput(msg)
 	case StateReady:
@@ -81,6 +87,28 @@ func (a *TUIApp) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return a, nil
+}
+
+// handleConfigChoice обрабатывает выбор конфигурации
+func (a *TUIApp) handleConfigChoice(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "1":
+		// Используем дефолтный конфиг
+		a.nodeConfig = core.DefaultNodeConfig()
+		a.state = StateProfileInput
+		return a, nil
+	case "2":
+		// TODO: Показать кастомную настройку конфига
+		// Пока что используем дефолтный
+		a.nodeConfig = core.DefaultNodeConfig()
+		a.state = StateProfileInput
+		return a, nil
+	case "ctrl+c":
+		return a, tea.Quit
+	default:
+		// Игнорируем другие клавиши
+		return a, nil
+	}
 }
 
 // handleProfileInput обрабатывает ввод профиля
@@ -180,6 +208,8 @@ func (a *TUIApp) View() string {
 	switch a.state {
 	case StateInitializing:
 		return a.renderInitializing()
+	case StateConfigChoice:
+		return a.renderConfigChoice()
 	case StateProfileInput:
 		return a.renderProfileInput()
 	case StateCoreStarting:
@@ -200,6 +230,30 @@ func (a *TUIApp) renderInitializing() string {
 ========================
 
 Инициализация...
+`
+}
+
+// renderConfigChoice отображает экран выбора конфигурации
+func (a *TUIApp) renderConfigChoice() string {
+	return `
+🦉 Owl Whisper TUI Client
+========================
+
+Выберите конфигурацию узла:
+
+1️⃣ Дефолтная конфигурация (рекомендуется)
+   - Все транспорты: TCP, QUIC, WebSocket, WebRTC
+   - Все протоколы: Noise, TLS
+   - NAT traversal: NATPortMap, HolePunching, AutoNATv2
+   - Relay и AutoRelay включены
+   - Статические relay адреса
+
+2️⃣ Кастомная конфигурация (в разработке)
+   - Настройка отдельных параметров
+
+Нажмите 1 для дефолтной конфигурации
+Нажмите 2 для кастомной (пока не работает)
+Нажмите Ctrl+C для выхода
 `
 }
 
@@ -249,11 +303,16 @@ Content ID: %s
 /contacts - Список контактов
 /find id <peer_id> - Поиск по Peer ID
 /find name <nickname#discriminator> - Поиск по никнейму
+/connect id <peer_id> - Поиск И подключение по Peer ID
+/connect name <nickname#discriminator> - Поиск И подключение по никнейму
 /add <peer_id> <nickname> - Добавить контакт
 /msg <nickname> <текст> - Отправить сообщение
 /network - Статус сети и технические пиры
 /status - Статус анонсирования и поиска
+/dhtinfo - Информация о DHT
 /diag - Полная диагностика системы
+/discover - Запустить агрессивный поиск пиров
+/advertise - Запустить агрессивное анонсирование
 /quit - Выход
 
 `)
@@ -293,9 +352,9 @@ func (a *TUIApp) startCore() tea.Cmd {
 			return errorMsg{err: fmt.Errorf("ошибка генерации ключа: %w", err)}
 		}
 
-		// Создаем Core контроллер
+		// Создаем Core контроллер с конфигурацией
 		ctx := context.Background()
-		controller, err := core.NewCoreControllerWithKeyBytes(ctx, keyBytes)
+		controller, err := core.NewCoreControllerWithKeyBytesAndConfig(ctx, keyBytes, a.nodeConfig)
 		if err != nil {
 			return errorMsg{err: fmt.Errorf("ошибка создания Core: %w", err)}
 		}
@@ -496,7 +555,7 @@ func (a *TUIApp) executeCommand(cmd string) tea.Cmd {
 	switch parts[0] {
 	case "/help":
 		return func() tea.Msg {
-			return outputMsg{line: debugMsg + "\nДоступные команды: /help, /peers, /contacts, /find, /add, /msg, /network, /status, /dhtinfo, /quit"}
+			return outputMsg{line: debugMsg + "\nДоступные команды: /help, /peers, /contacts, /find, /add, /msg, /network, /status, /dhtinfo, /discover, /advertise, /connect, /search, /quit"}
 		}
 	case "/peers":
 		return a.cmdPeers()
@@ -516,6 +575,14 @@ func (a *TUIApp) executeCommand(cmd string) tea.Cmd {
 		return a.cmdDHTInfo()
 	case "/diag":
 		return a.cmdDiag()
+	case "/discover":
+		return a.cmdDiscover(parts[1:])
+	case "/advertise":
+		return a.cmdAdvertise(parts[1:])
+	case "/connect":
+		return a.cmdConnect(parts[1:])
+	case "/search":
+		return a.cmdSearch(parts[1:])
 	case "/quit":
 		return tea.Quit
 	default:
@@ -935,5 +1002,239 @@ func (a *TUIApp) cmdDiag() tea.Cmd {
 		}
 
 		return outputMsg{line: sb.String()}
+	}
+}
+
+// cmdDiscover запускает агрессивный поиск пиров
+func (a *TUIApp) cmdDiscover(args []string) tea.Cmd {
+	return func() tea.Msg {
+		debugMsg := "Выполняю команду /discover"
+
+		if a.core == nil {
+			return outputMsg{line: debugMsg + "\n❌ Core не запущен"}
+		}
+
+		// Используем профиль как rendezvous строку
+		rendezvous := a.profile + "#" + a.discriminator
+
+		// Запускаем агрессивный поиск
+		a.core.StartAggressiveDiscovery(rendezvous)
+
+		return outputMsg{line: fmt.Sprintf("%s\n✅ Запущен агрессивный поиск пиров по rendezvous: %s\n🔄 Поиск будет выполняться каждые 15 секунд", debugMsg, rendezvous)}
+	}
+}
+
+// cmdAdvertise запускает агрессивное анонсирование
+func (a *TUIApp) cmdAdvertise(args []string) tea.Cmd {
+	return func() tea.Msg {
+		debugMsg := "Выполняю команду /advertise"
+
+		if a.core == nil {
+			return outputMsg{line: debugMsg + "\n❌ Core не запущен"}
+		}
+
+		// Используем профиль как rendezvous строку
+		rendezvous := a.profile + "#" + a.discriminator
+
+		// Запускаем агрессивное анонсирование
+		a.core.StartAggressiveAdvertising(rendezvous)
+
+		return outputMsg{line: fmt.Sprintf("%s\n✅ Запущено агрессивное анонсирование по rendezvous: %s\n🔄 Анонсирование будет выполняться каждые 15 секунд", debugMsg, rendezvous)}
+	}
+}
+
+// cmdConnect выполняет поиск И подключение к пиру
+func (a *TUIApp) cmdConnect(args []string) tea.Cmd {
+	if len(args) < 2 {
+		return func() tea.Msg {
+			return outputMsg{line: "❌ Использование: /connect id <peer_id> или /connect name <nickname#discriminator>"}
+		}
+	}
+
+	switch args[0] {
+	case "id":
+		if len(args) < 2 {
+			return func() tea.Msg {
+				return outputMsg{line: "❌ Использование: /connect id <peer_id>"}
+			}
+		}
+		return a.connectByPeerID(args[1])
+	case "name":
+		if len(args) < 2 {
+			return func() tea.Msg {
+				return outputMsg{line: "❌ Использование: /connect name <nickname#discriminator>"}
+			}
+		}
+		return a.connectByName(args[1])
+	default:
+		return func() tea.Msg {
+			return outputMsg{line: "❌ Использование: /connect id <peer_id> или /connect name <nickname#discriminator>"}
+		}
+	}
+}
+
+// connectByPeerID подключается к пиру по Peer ID
+func (a *TUIApp) connectByPeerID(peerIDStr string) tea.Cmd {
+	return func() tea.Msg {
+		debugMsg := fmt.Sprintf("Выполняю подключение по Peer ID: %s", peerIDStr)
+
+		if a.core == nil {
+			return outputMsg{line: debugMsg + "\n❌ Core не запущен"}
+		}
+
+		// Парсим Peer ID
+		peerID, err := peer.Decode(peerIDStr)
+		if err != nil {
+			return outputMsg{line: fmt.Sprintf("%s\n❌ Неверный Peer ID: %v", debugMsg, err)}
+		}
+
+		// Проверяем, не подключены ли уже
+		connectedPeers := a.core.GetConnectedPeers()
+		for _, p := range connectedPeers {
+			if p.String() == peerIDStr {
+				return outputMsg{line: fmt.Sprintf("%s\n✅ Уже подключены к %s", debugMsg, peerID.ShortString())}
+			}
+		}
+
+		// Ищем пира
+		addrInfo, err := a.core.FindPeer(peerID)
+		if err != nil {
+			return outputMsg{line: fmt.Sprintf("%s\n❌ Пир не найден: %v", debugMsg, err)}
+		}
+
+		// Подключаемся к найденному пиру
+		err = a.core.Connect(*addrInfo)
+		if err != nil {
+			return outputMsg{line: fmt.Sprintf("%s\n✅ Пир найден: %s\n📍 Адрес: %v\n❌ Ошибка подключения: %v", debugMsg, addrInfo.ID.String(), addrInfo.Addrs, err)}
+		}
+
+		return outputMsg{line: fmt.Sprintf("%s\n✅ Пир найден: %s\n📍 Адрес: %v\n🔗 Успешно подключились!", debugMsg, addrInfo.ID.String(), addrInfo.Addrs)}
+	}
+}
+
+// connectByName подключается к пиру по никнейму
+func (a *TUIApp) connectByName(nameWithDisc string) tea.Cmd {
+	return func() tea.Msg {
+		debugMsg := fmt.Sprintf("Выполняю подключение по никнейму: %s", nameWithDisc)
+
+		if a.core == nil {
+			return outputMsg{line: debugMsg + "\n❌ Core не запущен"}
+		}
+
+		// Вычисляем ContentID из никнейма
+		contentID := a.computeContentID(nameWithDisc)
+
+		// Ищем провайдеров
+		providers, err := a.core.FindProvidersForContent(contentID)
+		if err != nil {
+			return outputMsg{line: fmt.Sprintf("%s\n❌ Ошибка поиска: %v", debugMsg, err)}
+		}
+
+		if len(providers) == 0 {
+			return outputMsg{line: fmt.Sprintf("%s\n❌ Пир не найден", debugMsg)}
+		}
+
+		// Берем первого провайдера
+		provider := providers[0]
+
+		// Проверяем, не подключены ли уже
+		connectedPeers := a.core.GetConnectedPeers()
+		for _, p := range connectedPeers {
+			if p.String() == provider.ID.String() {
+				return outputMsg{line: fmt.Sprintf("%s\n✅ Уже подключены к %s", debugMsg, provider.ID.ShortString())}
+			}
+		}
+
+		// Подключаемся к найденному провайдеру
+		err = a.core.Connect(provider)
+		if err != nil {
+			return outputMsg{line: fmt.Sprintf("%s\n✅ Пир найден: %s\n📍 Адрес: %v\n❌ Ошибка подключения: %v", debugMsg, provider.ID.String(), provider.Addrs, err)}
+		}
+
+		return outputMsg{line: fmt.Sprintf("%s\n✅ Пир найден: %s\n📍 Адрес: %v\n🔗 Успешно подключились!", debugMsg, provider.ID.String(), provider.Addrs)}
+	}
+}
+
+// cmdSearch выполняет поиск без подключения
+func (a *TUIApp) cmdSearch(args []string) tea.Cmd {
+	if len(args) < 2 {
+		return func() tea.Msg {
+			return outputMsg{line: "❌ Использование: /search id <peer_id> или /search name <nickname#discriminator>"}
+		}
+	}
+
+	switch args[0] {
+	case "id":
+		if len(args) < 2 {
+			return func() tea.Msg {
+				return outputMsg{line: "❌ Использование: /search id <peer_id>"}
+			}
+		}
+		return a.searchByPeerID(args[1])
+	case "name":
+		if len(args) < 2 {
+			return func() tea.Msg {
+				return outputMsg{line: "❌ Использование: /search name <nickname#discriminator>"}
+			}
+		}
+		return a.searchByName(args[1])
+	default:
+		return func() tea.Msg {
+			return outputMsg{line: "❌ Использование: /search id <peer_id> или /search name <nickname#discriminator>"}
+		}
+	}
+}
+
+// searchByPeerID ищет пира по Peer ID
+func (a *TUIApp) searchByPeerID(peerIDStr string) tea.Cmd {
+	return func() tea.Msg {
+		debugMsg := fmt.Sprintf("Выполняю поиск по Peer ID: %s", peerIDStr)
+
+		if a.core == nil {
+			return outputMsg{line: debugMsg + "\n❌ Core не запущен"}
+		}
+
+		// Парсим Peer ID
+		peerID, err := peer.Decode(peerIDStr)
+		if err != nil {
+			return outputMsg{line: fmt.Sprintf("%s\n❌ Неверный Peer ID: %v", debugMsg, err)}
+		}
+
+		// Ищем пира
+		addrInfo, err := a.core.FindPeer(peerID)
+		if err != nil {
+			return outputMsg{line: fmt.Sprintf("%s\n❌ Пир не найден: %v", debugMsg, err)}
+		}
+
+		return outputMsg{line: fmt.Sprintf("%s\n✅ Пир найден: %s\n📍 Адрес: %v", debugMsg, addrInfo.ID.String(), addrInfo.Addrs)}
+	}
+}
+
+// searchByName ищет пира по никнейму
+func (a *TUIApp) searchByName(nameWithDisc string) tea.Cmd {
+	return func() tea.Msg {
+		debugMsg := fmt.Sprintf("Выполняю поиск по никнейму: %s", nameWithDisc)
+
+		if a.core == nil {
+			return outputMsg{line: debugMsg + "\n❌ Core не запущен"}
+		}
+
+		// Вычисляем ContentID из никнейма
+		contentID := a.computeContentID(nameWithDisc)
+
+		// Ищем провайдеров
+		providers, err := a.core.FindProvidersForContent(contentID)
+		if err != nil {
+			return outputMsg{line: fmt.Sprintf("%s\n❌ Ошибка поиска: %v", debugMsg, err)}
+		}
+
+		if len(providers) == 0 {
+			return outputMsg{line: fmt.Sprintf("%s\n❌ Пир не найден", debugMsg)}
+		}
+
+		// Берем первого провайдера
+		provider := providers[0]
+
+		return outputMsg{line: fmt.Sprintf("%s\n✅ Пир найден: %s\n📍 Адрес: %v", debugMsg, provider.ID.String(), provider.Addrs)}
 	}
 }
