@@ -112,25 +112,34 @@ if peers_ptr:
     owlwhisper.FreeString(peers_ptr)
 ```
 
-### **4. Отправка сообщений**
+### **4. Универсальный обмен данными**
 
 ```python
-# Отправка сообщения всем подключенным пирам
-message = "Привет, мир!".encode('utf-8')
-result = owlwhisper.SendMessage(message)
+# Создание потока к пиру
+peer_id = "12D3KooW...".encode('utf-8')
+result = owlwhisper.CreateStream(peer_id)
 if result == 0:
-    print("✅ Сообщение отправлено всем пирам")
+    print("✅ Поток создан")
+
+# Отправка текстового сообщения
+message = "Привет, мир!".encode('utf-8')
+result = owlwhisper.Send(peer_id, message, len(message))
+if result == 0:
+    print("✅ Сообщение отправлено")
 else:
     print("❌ Ошибка отправки сообщения")
 
-# Отправка сообщения конкретному пиру
-peer_id = "12D3KooW...".encode('utf-8')
-message = "Привет, конкретный пир!".encode('utf-8')
-result = owlwhisper.SendMessageToPeer(peer_id, message)
-if result == 0:
-    print("✅ Сообщение отправлено конкретному пиру")
-else:
-    print("❌ Ошибка отправки сообщения")
+# Отправка файла
+with open("document.pdf", "rb") as f:
+    file_data = f.read()
+    header = b'FILE:document.pdf:'
+    data_to_send = header + file_data
+    
+    result = owlwhisper.Send(peer_id, data_to_send, len(data_to_send))
+    if result == 0:
+        print("✅ Файл отправлен")
+    else:
+        print("❌ Ошибка отправки файла")
 ```
 
 ### **5. Остановка**
@@ -276,12 +285,7 @@ def handle_event(event):
     """Обработка события по типу"""
     event_type = event['type']
     
-    if event_type == 'NewMessage':
-        sender_id = event['payload']['senderID']
-        data = event['payload']['data']
-        print(f"📨 Новое сообщение от {sender_id}")
-        
-    elif event_type == 'PeerConnected':
+    if event_type == 'PeerConnected':
         peer_id = event['payload']['peerID']
         print(f"🔗 Подключился пир: {peer_id}")
         
@@ -299,6 +303,75 @@ thread = threading.Thread(target=event_listener, daemon=True)
 thread.start()
 
 print("🚀 Слушатель событий запущен")
+
+## 📨 **Универсальный обмен данными**
+
+### **Отправка данных**
+
+```python
+# Создание потока к пиру
+peer_id = "12D3KooW...".encode('utf-8')
+result = owlwhisper.CreateStream(peer_id)
+if result == 0:
+    print("✅ Поток создан")
+
+# Отправка текстового сообщения
+message = "Привет, мир!".encode('utf-8')
+result = owlwhisper.Send(peer_id, message, len(message))
+if result == 0:
+    print("✅ Сообщение отправлено")
+
+# Отправка файла
+with open("document.pdf", "rb") as f:
+    file_data = f.read()
+    header = b'FILE:document.pdf:'
+    data_to_send = header + file_data
+    
+    result = owlwhisper.Send(peer_id, data_to_send, len(data_to_send))
+    if result == 0:
+        print("✅ Файл отправлен")
+```
+
+### **Получение входящих данных через события**
+
+```python
+import threading
+import time
+
+def event_listener():
+    """Слушатель событий для получения входящих данных"""
+    while True:
+        try:
+            event_ptr = owlwhisper.GetNextEvent()
+            if event_ptr:
+                event_json = ctypes.string_at(event_ptr).decode()
+                owlwhisper.FreeString(event_ptr)
+                
+                event = json.loads(event_json)
+                
+                if event['type'] == 'NewMessage':
+                    sender_id = event['payload']['senderID']
+                    data = event['payload']['data']
+                    
+                    print(f"📨 Данные от {sender_id}: {data[:100]}...")
+                    
+                    # Обработка в зависимости от типа данных
+                    if data.startswith(b'FILE:'):
+                        handle_file_data(sender_id, data)
+                    elif data.startswith(b'JSON:'):
+                        handle_json_data(sender_id, data)
+                    else:
+                        handle_text_data(sender_id, data)
+                        
+        except Exception as e:
+            print(f"❌ Ошибка в цикле событий: {e}")
+            time.sleep(1)
+
+# Запускаем слушатель в отдельном потоке
+thread = threading.Thread(target=event_listener, daemon=True)
+thread.start()
+print("🚀 Слушатель событий запущен")
+```
 ```
 
 ## ⚠️ **Важные замечания**
