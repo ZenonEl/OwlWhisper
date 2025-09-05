@@ -198,24 +198,10 @@ func StopOwlWhisper() C.int {
 	return C.int(0) // Успех
 }
 
-//export SendData
-func SendData(data *C.char, dataLength C.int) C.int {
-	if globalController == nil {
-		return -1
-	}
+// NOTE: Broadcast send function removed. Use Send(peerID, data, len) for 1:1 only.
 
-	goData := C.GoBytes(unsafe.Pointer(data), dataLength)
-
-	err := globalController.Broadcast(goData)
-	if err != nil {
-		return -1
-	}
-
-	return 0
-}
-
-//export SendDataToPeer
-func SendDataToPeer(peerID *C.char, data *C.char, dataLength C.int) C.int {
+//export Send
+func Send(peerID *C.char, data *C.char, dataLength C.int) C.int {
 	if globalController == nil {
 		return -1
 	}
@@ -229,7 +215,7 @@ func SendDataToPeer(peerID *C.char, data *C.char, dataLength C.int) C.int {
 		return -1
 	}
 
-	// Отправляем данные
+	// Отправляем данные (Go-код сам создаст соединение если нужно)
 	err = globalController.Send(peer, goData)
 	if err != nil {
 		return -1
@@ -237,6 +223,8 @@ func SendDataToPeer(peerID *C.char, data *C.char, dataLength C.int) C.int {
 
 	return 0
 }
+
+// NOTE: Legacy SendDataToPeer removed. Use Send(peerID, data, len).
 
 //export GetMyPeerID
 func GetMyPeerID() *C.char {
@@ -978,4 +966,148 @@ func AdvertiseOnce(rendezvous *C.char) C.int {
 	}
 
 	return C.int(0)
+}
+
+//export StartOwlWhisperWithDefaultConfig
+func StartOwlWhisperWithDefaultConfig() C.int {
+	if globalController != nil {
+		return -1 // уже запущен
+	}
+
+	// Инициализируем логгер по умолчанию (только в консоль)
+	InitGlobalLogger(LogLevelInfo, LogOutputConsole, "")
+
+	globalCtx, globalCancel = context.WithCancel(context.Background())
+
+	controller, err := NewCoreControllerWithConfig(globalCtx, DefaultNodeConfig())
+	if err != nil {
+		return -1
+	}
+
+	if err := controller.Start(); err != nil {
+		return -1
+	}
+
+	globalController = controller
+	return 0
+}
+
+//export StartOwlWhisperWithCustomConfig
+func StartOwlWhisperWithCustomConfig(configJSON *C.char) C.int {
+	if globalController != nil {
+		return -1 // уже запущен
+	}
+
+	// Инициализируем логгер по умолчанию (только в консоль)
+	InitGlobalLogger(LogLevelInfo, LogOutputConsole, "")
+
+	globalCtx, globalCancel = context.WithCancel(context.Background())
+
+	goConfigJSON := C.GoString(configJSON)
+
+	// Парсим JSON конфигурацию
+	var config NodeConfig
+	err := json.Unmarshal([]byte(goConfigJSON), &config)
+	if err != nil {
+		return -1
+	}
+
+	controller, err := NewCoreControllerWithConfig(globalCtx, &config)
+	if err != nil {
+		return -1
+	}
+
+	if err := controller.Start(); err != nil {
+		return -1
+	}
+
+	globalController = controller
+	return 0
+}
+
+//export StartOwlWhisperWithKeyAndCustomConfig
+func StartOwlWhisperWithKeyAndCustomConfig(keyBytes *C.char, keyLength C.int, configJSON *C.char) C.int {
+	if globalController != nil {
+		return -1 // уже запущен
+	}
+
+	// Инициализируем логгер по умолчанию (только в консоль)
+	InitGlobalLogger(LogLevelInfo, LogOutputConsole, "")
+
+	globalCtx, globalCancel = context.WithCancel(context.Background())
+
+	goKeyBytes := C.GoBytes(unsafe.Pointer(keyBytes), keyLength)
+	goConfigJSON := C.GoString(configJSON)
+
+	var config NodeConfig
+	if err := json.Unmarshal([]byte(goConfigJSON), &config); err != nil {
+		return -1
+	}
+
+	controller, err := NewCoreControllerWithKeyBytesAndConfig(globalCtx, goKeyBytes, &config)
+	if err != nil {
+		return -1
+	}
+
+	if err := controller.Start(); err != nil {
+		return -1
+	}
+
+	globalController = controller
+	return 0
+}
+
+//export GetCurrentNodeConfig
+func GetCurrentNodeConfig() *C.char {
+	if globalController == nil {
+		return nil
+	}
+
+	// Получаем текущую конфигурацию узла
+	node := globalController.GetNode()
+	if node == nil {
+		return nil
+	}
+
+	config := node.GetConfig()
+	if config == nil {
+		return nil
+	}
+
+	// Конвертируем в JSON
+	configJSON, err := json.Marshal(config)
+	if err != nil {
+		return nil
+	}
+
+	return C.CString(string(configJSON))
+}
+
+//export UpdateNodeConfig
+func UpdateNodeConfig(configJSON *C.char) C.int {
+	if globalController == nil {
+		return -1
+	}
+
+	goConfigJSON := C.GoString(configJSON)
+
+	// Парсим JSON конфигурацию
+	var config NodeConfig
+	err := json.Unmarshal([]byte(goConfigJSON), &config)
+	if err != nil {
+		return -1
+	}
+
+	// Обновляем конфигурацию узла
+	node := globalController.GetNode()
+	if node == nil {
+		return -1
+	}
+
+	err = node.UpdateConfig(&config)
+	if err != nil {
+		return -1
+	}
+
+	return 0
 }

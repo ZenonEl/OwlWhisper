@@ -15,8 +15,7 @@ char* GenerateNewKeyPair();
 char* GenerateNewKeyBytes();
 
 // Отправка данных
-int SendData(char* data, int dataLength);
-int SendDataToPeer(char* peerID, char* data, int dataLength);
+int Send(char* peerID, char* data, int dataLength);  // Универсальная функция отправки (автоматически создает соединение)
 
 // Получение информации
 char* GetMyPeerID();
@@ -63,6 +62,12 @@ int SetupAutoRelayWithDHT();
 // События - единственный канал асинхронной связи с клиентом
 char* GetNextEvent();
 
+// Управление конфигурацией узла
+int StartOwlWhisperWithDefaultConfig();                                    // Запуск с дефолтным конфигом
+int StartOwlWhisperWithCustomConfig(char* configJSON);                     // Запуск с кастомным конфигом
+int StartOwlWhisperWithKeyAndCustomConfig(char* keyBytes, int keyLength, char* configJSON); // Запуск с ключом и кастомным конфигом
+char* GetCurrentNodeConfig();                                              // Получение текущего конфига
+int UpdateNodeConfig(char* configJSON);                                    // Обновление конфига
 
 // Функции для настройки логирования
 extern int SetLogLevel(int level);

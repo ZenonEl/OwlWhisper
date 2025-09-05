@@ -228,7 +228,7 @@ func (nel *NetworkEventLogger) ListenClose(network.Network, multiaddr.Multiaddr)
 
 func (nel *NetworkEventLogger) Connected(net network.Network, conn network.Conn) {
 	peerID := conn.RemotePeer().String()
-	Info("🔗 EVENT: Успешное соединение с %s", conn.RemotePeer().ShortString())
+	//Info("🔗 EVENT: Успешное соединение с %s", conn.RemotePeer().ShortString())
 
 	// Отправляем событие в EventManager
 	if nel.node != nil && nel.node.eventManager != nil {
@@ -241,7 +241,7 @@ func (nel *NetworkEventLogger) Connected(net network.Network, conn network.Conn)
 
 func (nel *NetworkEventLogger) Disconnected(net network.Network, conn network.Conn) {
 	peerID := conn.RemotePeer().String()
-	Info("🔌 EVENT: Соединение с %s разорвано", conn.RemotePeer().ShortString())
+	//Info("🔌 EVENT: Соединение с %s разорвано", conn.RemotePeer().ShortString())
 
 	// Отправляем событие в EventManager
 	if nel.node != nil && nel.node.eventManager != nil {
@@ -306,6 +306,9 @@ type Node struct {
 
 	// StreamHandler для обработки стримов и чата
 	streamHandler *StreamHandler
+
+	// config - текущая конфигурация узла
+	config *NodeConfig
 }
 
 // NewNode создает новый libp2p узел (для обратной совместимости)
@@ -372,6 +375,7 @@ func NewNodeWithKeyAndConfig(ctx context.Context, privKey crypto.PrivKey, persis
 		connManager:    h.ConnManager(),
 		eventManager:   NewEventManager(1000), // Очередь на 1000 событий
 		streamHandler:  NewStreamHandler(h, PROTOCOL_ID, config),
+		config:         config, // Инициализируем конфигурацию
 	}
 
 	// Инициализируем менеджер автопереподключения
@@ -1002,5 +1006,25 @@ func (n *Node) SetupAutoRelayWithDHT(kademliaDHT *dht.IpfsDHT) error {
 	}
 
 	Info("✅ Autorelay с DHT peer source успешно настроен")
+	return nil
+}
+
+// GetConfig возвращает текущую конфигурацию узла
+func (n *Node) GetConfig() *NodeConfig {
+	return n.config
+}
+
+// UpdateConfig обновляет конфигурацию узла
+func (n *Node) UpdateConfig(newConfig *NodeConfig) error {
+	if newConfig == nil {
+		return fmt.Errorf("config cannot be nil")
+	}
+
+	// Обновляем конфигурацию
+	n.config = newConfig
+
+	// Здесь можно добавить логику для применения изменений
+	// Например, перезапуск транспортов, обновление DHT и т.д.
+
 	return nil
 }
