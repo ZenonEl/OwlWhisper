@@ -1168,3 +1168,8 @@ func (c *CoreController) SetupAutoRelayWithDHT(kademliaDHT *dht.IpfsDHT) error {
 	}
 	return c.node.SetupAutoRelayWithDHT(kademliaDHT)
 }
+
+// GetNode возвращает узел для внутреннего использования
+func (c *CoreController) GetNode() *Node {
+	return c.node
+}
