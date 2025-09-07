@@ -37,6 +37,10 @@ type NewMessagePayload struct {
 	Data     []byte `json:"data"`
 }
 
+type CoreReadyPayload struct {
+	PeerID string `json:"peer_id"`
+}
+
 // PeerStatusPayload содержит данные для событий "PeerConnected" и "PeerDisconnected".
 type PeerStatusPayload struct {
 	PeerID string `json:"peer_id"`
@@ -96,7 +100,9 @@ func (c *CoreController) Start() error {
 	if err != nil {
 		return fmt.Errorf("ошибка создания узла: %w", err)
 	}
-
+	c.pushEvent("CoreReady", CoreReadyPayload{
+		PeerID: c.node.Host().ID().String(),
+	})
 	// 2. Регистрируем обработчик входящих потоков
 	c.node.SetStreamHandler(PROTOCOL_ID, c.handleStream)
 	// Регистрируем обработчик сетевых событий для отслеживания подключений

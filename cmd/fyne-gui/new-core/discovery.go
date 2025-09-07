@@ -45,17 +45,13 @@ func NewDiscoveryManager(ctx context.Context, h host.Host, cfg Config, onPeerFou
 		ctx:         ctx,
 		onPeerFound: onPeerFound,
 	}
-
-	// Инициализируем DHT, если он включен в конфигурации.
 	if cfg.EnableDHT {
-		// DHT.New требует опций, мы передаем ModeServer, чтобы быть полноценным участником сети.
-		dht, err := dht.New(ctx, h, dht.Mode(dht.ModeServer))
+		kadDHT, err := dht.New(ctx, h, dht.Mode(dht.ModeServer))
 		if err != nil {
 			return nil, err
 		}
-		dm.dht = dht
+		dm.dht = kadDHT
 	}
-
 	return dm, nil
 }
 
@@ -91,55 +87,53 @@ func (dm *DiscoveryManager) startXxxMDNS() {
 
 // startXxxDHT подключается к bootstrap-узлам и запускает обнаружение в глобальной сети.
 func (dm *DiscoveryManager) startXxxDHT() {
-	log.Println("INFO: [DHT] Подключение к bootstrap-узлам...")
+	Info("[DHT] Подключение к bootstrap-узлам...")
 	if err := dm.dht.Bootstrap(dm.ctx); err != nil {
-		log.Printf("ERROR: [DHT] Ошибка bootstrap: %v", err)
+		Error("[DHT] Ошибка bootstrap: %v", err)
 		return
 	}
-	log.Println("INFO: [DHT] Bootstrap завершен.")
+	Info("[DHT] Bootstrap завершен.")
 
-	// Принудительно подключаемся к нескольким bootstrap-пирам, чтобы "разогреть" таблицу маршрутизации.
+	// Принудительное подключение, как в PoC
 	var wg sync.WaitGroup
 	for _, maddr := range dht.DefaultBootstrapPeers {
 		wg.Add(1)
 		go func(peerMaddr multiaddr.Multiaddr) {
 			defer wg.Done()
-			peerInfo, err := peer.AddrInfoFromP2pAddr(peerMaddr)
-			if err != nil {
-				// log.Printf("WARN: [DHT] Не удалось распарсить bootstrap-адрес: %v", err)
-				return
-			}
+			peerInfo, _ := peer.AddrInfoFromP2pAddr(peerMaddr)
 			if err := dm.host.Connect(dm.ctx, *peerInfo); err != nil {
-				// log.Printf("WARN: [DHT] Не удалось подключиться к bootstrap-пиру %s: %v", peerInfo.ID.ShortString(), err)
+				// Warn("[DHT] Не удалось подключиться к bootstrap-пиру %s: %v", peerInfo.ID.ShortString(), err)
 			} else {
-				log.Printf("INFO: [DHT] Установлено соединение с bootstrap-пиром: %s", peerInfo.ID.ShortString())
+				Info("[DHT] Установлено соединение с bootstrap-пиром: %s", peerInfo.ID.ShortString())
 			}
 		}(maddr)
 	}
 	wg.Wait()
 
-	// Используем RoutingDiscovery как высокоуровневую обертку над DHT
+	// --- ИНТЕГРАЦИЯ ЛОГИКИ RENDEZVOUS ИЗ PoC ---
 	routingDiscovery := routing.NewRoutingDiscovery(dm.dht)
 
-	// Постоянно анонсируем свое присутствие в "комнате" (Rendezvous)
-	log.Printf("INFO: [DHT] Начинаем анонсирование в rendezvous-точке: %s", dm.cfg.RendezvousString)
+	// 1. Анонсируем себя в "общей комнате"
+	Info("[DHT] Начинаем анонсирование в rendezvous-точке: %s", dm.cfg.RendezvousString)
 	dutil.Advertise(dm.ctx, routingDiscovery, dm.cfg.RendezvousString)
-	log.Println("INFO: [DHT] Анонсирование запущено.")
+	Info("[DHT] Анонсирование запущено.")
 
-	// Постоянно ищем других пиров в той же "комнате"
-	log.Printf("INFO: [DHT] Начинаем поиск пиров в rendezvous-точке: %s", dm.cfg.RendezvousString)
+	// 2. Ищем других в "общей комнате"
+	Info("[DHT] Начинаем поиск пиров в rendezvous-точке: %s", dm.cfg.RendezvousString)
 	peerChan, err := routingDiscovery.FindPeers(dm.ctx, dm.cfg.RendezvousString)
 	if err != nil {
-		log.Printf("ERROR: [DHT] Ошибка поиска пиров: %v", err)
+		Error("[DHT] Ошибка поиска пиров по rendezvous: %v", err)
 		return
 	}
 
-	// В цикле обрабатываем найденных пиров и передаем их наверх
-	for p := range peerChan {
-		if p.ID == dm.host.ID() {
-			continue // Пропускаем себя
+	// Обрабатываем найденных "случайных" пиров
+	go func() {
+		for p := range peerChan {
+			if p.ID == dm.host.ID() {
+				continue
+			}
+			Info("[DHT] Rendezvous: Найден пир: %s", p.ID.ShortString())
+			dm.onPeerFound(p) // Сообщаем наверх о находке
 		}
-		log.Printf("INFO: [DHT] Найден пир: %s", p.ID.ShortString())
-		dm.onPeerFound(p)
-	}
+	}()
 }

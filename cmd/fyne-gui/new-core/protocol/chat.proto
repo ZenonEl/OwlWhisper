@@ -1,0 +1,74 @@
+syntax = "proto3";
+
+package protocol;
+
+// Укажите здесь ваш правильный путь к Go-модулю
+option go_package = "./";
+
+// Envelope - "конверт" для каждого сообщения, передаваемого по сети.
+message Envelope {
+    string message_id = 1;      // Уникальный ID конверта (UUID)
+    string sender_id = 2;       // PeerID отправителя
+    int64 timestamp_unix = 3;   // Время отправки
+    
+    enum ChatType {
+        PRIVATE = 0; // Личное сообщение (1-на-1)
+        GROUP = 1;   // Групповой чат
+    }
+    ChatType chat_type = 4;
+    
+    string chat_id = 5;         // ID чата (для групп - ID группы, для личных - PeerID собеседника)
+
+    oneof payload {
+        Content content = 6;            // Полезная нагрузка (текст, файл)
+        ReadReceipts read_receipts = 7; // Уведомление о прочтении
+        ProfileInfo profile_info = 8;   // Полная информация о профиле (для "рукопожатия")
+
+        // ИЗМЕНЕНО: Наш "пинг" и "понг" для запроса профиля
+        ProfileRequest profile_request = 9; // Запрос на получение профиля
+        ProfileResponse profile_response = 10;// Ответ с профилем
+    }
+}
+
+// ... (Content, TextMessage, FileMetadata, ReadReceipts без изменений) ...
+message Content {
+    oneof type {
+        TextMessage text = 1;
+        FileMetadata file = 2;
+    }
+}
+message TextMessage {
+    string body = 1;
+    string reply_to_message_id = 2;
+}
+message FileMetadata {
+    string filename = 1;
+    int64 size_bytes = 2;
+    string mime_type = 3;
+    string hash_sha256 = 4;
+}
+message ReadReceipts {
+    repeated string message_ids = 1;
+}
+
+
+// ProfileInfo - информация о профиле пользователя для обмена между клиентами.
+message ProfileInfo {
+    string nickname = 1;
+    string discriminator = 2;
+    string display_name = 3;
+    string avatar_hash = 4;
+    map<string, string> metadata = 5;
+}
+
+// НОВОЕ: Запрос профиля. Может быть пустым, сам факт получения
+// этого сообщения является запросом.
+message ProfileRequest {
+    // В будущем можно добавить поле, например, "какую версию профиля я знаю",
+    // чтобы не пересылать данные лишний раз.
+}
+
+// НОВОЕ: Ответ на запрос профиля.
+message ProfileResponse {
+    ProfileInfo profile = 1; // Содержит актуальный профиль пользователя
+}
