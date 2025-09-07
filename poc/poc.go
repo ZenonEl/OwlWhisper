@@ -14,10 +14,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ipfs/go-cid"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/crypto"
-	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
@@ -25,8 +25,8 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/host/autorelay"
 	noise "github.com/libp2p/go-libp2p/p2p/security/noise"
 	tls "github.com/libp2p/go-libp2p/p2p/security/tls"
+	"github.com/multiformats/go-multihash"
 
-	// Актуальные импорты транспортов
 	quic "github.com/libp2p/go-libp2p/p2p/transport/quic"
 	tcp "github.com/libp2p/go-libp2p/p2p/transport/tcp"
 	webrtc "github.com/libp2p/go-libp2p/p2p/transport/webrtc"
@@ -34,11 +34,42 @@ import (
 )
 
 const protocolID = "/p2p-chat/1.0.0"
+const appPrefix = "owlwhisper" // Префикс для Rendezvous
+
+// --- Helper-функция для создания CID из ника ---
+func getCIDForNick(nick string) (cid.Cid, error) {
+	pref := cid.Prefix{
+		Version:  1,
+		Codec:    cid.Raw,
+		MhType:   multihash.SHA2_256,
+		MhLength: -1,
+	}
+	c, err := pref.Sum([]byte(nick))
+	if err != nil {
+		return cid.Undef, err
+	}
+	return c, nil
+}
 
 func main() {
-	rendezvous := flag.String("rendezvous", "my-super-secret-rendezvous-point", "Уникальная строка для поиска пиров")
-	discoverMode := flag.Bool("discover", false, "Запустить в режиме поиска пиров")
+	// --- Определение флагов командной строки ---
+	myNick := flag.String("my-nick", "", "Ваш уникальный ник (обязательно)")
+
+	findNick := flag.String("find-nick", "", "Ник пользователя для поиска")
+	findPeerID := flag.String("find-peer-id", "", "Peer ID для прямого поиска")
+
+	// Булевые флаги для выбора методов поиска (по умолчанию true)
+	useRendezvous := flag.Bool("find-rendezvous", true, "Использовать Rendezvous для поиска по нику")
+	useCID := flag.Bool("find-cid", true, "Использовать CID для поиска по нику")
+
 	flag.Parse()
+
+	if *myNick == "" {
+		log.Fatalln("Ошибка: необходимо указать ваш ник с помощью флага -my-nick")
+	}
+
+	// Определяем, есть ли хотя бы одна задача на поиск
+	isDiscovering := *findNick != "" || *findPeerID != ""
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -49,11 +80,9 @@ func main() {
 	}
 
 	// --- Сборка списка Relay-узлов ---
-	// Наши "спасательные круги" - статические релеи, работающие на стандартных портах.
 	staticRelaysStrings := []string{
 		"/dns4/relay.dev.svcs.d.foundation/tcp/443/wss/p2p/12D3KooWCKd2fU1g4k15u3J5i6pGk26h3g68d3amEa2S71G5v1jS",
 	}
-
 	var allRelays []peer.AddrInfo
 	for _, addrStr := range staticRelaysStrings {
 		pi, err := peer.AddrInfoFromString(addrStr)
@@ -63,16 +92,18 @@ func main() {
 		}
 		allRelays = append(allRelays, *pi)
 	}
-
-	// ИСПОЛЬЗУЕМ ЛИБУ, ЧТОБЫ ПОЛУЧИТЬ СПИСОК BOOTSTRAP-УЗЛОВ.
-	// Они также могут выступать в роли релеев.
 	bootstrapPeers := dht.GetDefaultBootstrapPeerAddrInfos()
 	allRelays = append(allRelays, bootstrapPeers...)
-
 	log.Printf("🔗 Всего relay-кандидатов: %d (статические: %d + bootstrap: %d)",
 		len(allRelays), len(staticRelaysStrings), len(bootstrapPeers))
 
 	var kademliaDHT *dht.IpfsDHT
+
+	// --- Создание Connection Manager для стабильности соединений ---
+	// cm, err := connmgr.NewConnManager(100, 400, connmgr.WithGracePeriod(time.Minute))
+	// if err != nil {
+	// 	log.Fatalf("Failed to create connection manager: %v", err)
+	// }
 
 	// --- "Ультимативная" конфигурация хоста ---
 	node, err := libp2p.New(
@@ -91,6 +122,7 @@ func main() {
 		// Двойное шифрование для максимальной совместимости
 		libp2p.Security(noise.ID, noise.New),
 		libp2p.Security(tls.ID, tls.New),
+		//libp2p.ConnectionManager(cm),
 		// Все механизмы обхода NAT
 		libp2p.NATPortMap(),
 		libp2p.EnableHolePunching(),
@@ -138,6 +170,7 @@ func main() {
 	for _, addr := range node.Addrs() {
 		fmt.Printf("    - %s\n", addr)
 	}
+	log.Printf("[*] Анонсируем себя под ником: %s", *myNick)
 	fmt.Println()
 
 	// --- Настройка DHT и сервисов обнаружения ---
@@ -150,7 +183,6 @@ func main() {
 		log.Fatalf("Ошибка bootstrap DHT: %v", err)
 	}
 
-	// Подключаемся к bootstrap-пирам для наполнения таблицы маршрутизации
 	var wg sync.WaitGroup
 	for _, peerAddr := range bootstrapPeers {
 		wg.Add(1)
@@ -167,98 +199,168 @@ func main() {
 	}
 	wg.Wait()
 
-	// --- Основная логика: "Слушатель" или "Искатель" ---
+	// --- Основная логика ---
 	node.SetStreamHandler(protocolID, handleStream)
 	routingDiscovery := routing.NewRoutingDiscovery(kademliaDHT)
 
-	if !*discoverMode {
-		// Режим "Слушателя": анонсируем себя в DHT
-		log.Printf("Анонсируем себя по rendezvous-строке: %s", *rendezvous)
+	// --- Слой анонса (всегда активен) ---
+	go func() {
+		rendezvousPoint := fmt.Sprintf("%s-%s", appPrefix, *myNick)
+		myNickCID, err := getCIDForNick(*myNick)
+		if err != nil {
+			log.Printf("Ошибка создания CID для своего ника: %v", err)
+			return // Не можем анонсировать через CID
+		}
 
-		// Агрессивное анонсирование для стабильности relay-адресов
-		go func() {
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-					dutil.Advertise(ctx, routingDiscovery, *rendezvous)
-					log.Printf("🔄 Анонсировано в DHT: %s", *rendezvous)
-					time.Sleep(15 * time.Second) // Повторяем каждые 15 секунд
-				}
+		ticker := time.NewTicker(20 * time.Second)
+		defer ticker.Stop()
+		for {
+			log.Printf("📢 Анонсируем себя по Rendezvous: %s", rendezvousPoint)
+			dutil.Advertise(ctx, routingDiscovery, rendezvousPoint)
+
+			log.Printf("📢 Анонсируем себя по CID: %s", myNickCID)
+			if err := kademliaDHT.Provide(ctx, myNickCID, true); err != nil {
+				log.Printf("Ошибка анонса по CID: %v", err)
 			}
-		}()
 
-		log.Println("Успешно анонсировано. Ожидание подключений...")
-	} else {
-		// Режим "Искателя": ищем и подключаемся к пирам
-		log.Printf("Ищем пиров по rendezvous-строке: %s", *rendezvous)
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
 
-		// Агрессивный поиск пиров с повторениями
-		go func() {
-			for {
-				select {
-				case <-ctx.Done():
+	log.Println("✅ Слой анонса запущен. Ожидание подключений...")
+
+	// --- Слой поиска (если нужно) ---
+	if isDiscovering {
+		peerChan := make(chan peer.AddrInfo)
+		var searchWg sync.WaitGroup
+
+		// Запускаем поиск по Peer ID
+		if *findPeerID != "" {
+			searchWg.Add(1)
+			go func() {
+				defer searchWg.Done()
+				log.Printf("🔍 Начинаем поиск по Peer ID: %s", *findPeerID)
+				peerID, err := peer.Decode(*findPeerID)
+				if err != nil {
+					log.Printf("Ошибка декодирования Peer ID: %v", err)
 					return
-				default:
-					peerChan, err := routingDiscovery.FindPeers(ctx, *rendezvous)
-					if err != nil {
-						log.Printf("Ошибка поиска пиров: %v", err)
-						time.Sleep(10 * time.Second)
-						continue
-					}
+				}
 
-					for p := range peerChan {
+				// FindPeer может быть очень медленным, даем ему время
+				ctxFind, cancelFind := context.WithTimeout(ctx, 2*time.Minute)
+				defer cancelFind()
+				pi, err := kademliaDHT.FindPeer(ctxFind, peerID)
+				if err != nil {
+					log.Printf("Не удалось найти пир по Peer ID %s: %v", *findPeerID, err)
+					return
+				}
+				log.Printf("✅ Найден пир по Peer ID: %s", pi.ID)
+				peerChan <- pi
+			}()
+		}
+
+		// Запускаем поиск по Нику
+		if *findNick != "" {
+			// Поиск по Rendezvous
+			if *useRendezvous {
+				searchWg.Add(1)
+				go func() {
+					defer searchWg.Done()
+					rendezvousPoint := fmt.Sprintf("%s-%s", appPrefix, *findNick)
+					log.Printf("🔍 Начинаем поиск по Rendezvous: %s", rendezvousPoint)
+					foundPeers, err := routingDiscovery.FindPeers(ctx, rendezvousPoint)
+					if err != nil {
+						log.Printf("Ошибка поиска по Rendezvous: %v", err)
+						return
+					}
+					for p := range foundPeers {
 						if p.ID == node.ID() {
 							continue
 						}
-						log.Printf("Найден пир: %s. Адреса: %v", p.ID, p.Addrs)
-
-						// --- УПРОЩЕННАЯ И НАДЕЖНАЯ ЛОГИКА ПОДКЛЮЧЕНИЯ ---
-						// Мы просто вызываем Connect и доверяем libp2p сделать всю магию:
-						// он сам попробует прямые адреса, сам сделает hole punching,
-						// сам использует relay-адрес (если "Слушатель" смог его анонсировать).
-						// Даем ему достаточно времени, т.к. relay может быть медленным.
-						ctxConnect, cancelConnect := context.WithTimeout(ctx, 90*time.Second)
-						if err := node.Connect(ctxConnect, p); err != nil {
-							log.Printf("❌ Не удалось подключиться к %s: %v", p.ID.ShortString(), err)
-							cancelConnect()
-							continue
-						}
-						cancelConnect()
-
-						log.Printf("✅ УСПЕШНОЕ СОЕДИНЕНИЕ с %s!", p.ID.ShortString())
-						log.Printf("   🔍 Создаем стрим с протоколом: %s", protocolID)
-
-						// --- ВОТ ОНО, РЕШЕНИЕ ---
-						// Создаем новый контекст с увеличенным таймаутом специально для открытия стрима.
-						// 30 секунд - это хороший, надежный таймаут для медленных мобильных сетей.
-						streamCtx, streamCancel := context.WithTimeout(ctx, 60*time.Second)
-						stream, err := node.NewStream(streamCtx, p.ID, protocolID)
-						streamCancel() // Не забываем отменять контекст
-
-						if err != nil {
-							log.Printf("   ❌ Не удалось открыть стрим: %v", err)
-							continue
-						}
-
-						log.Printf("   ✅ Стрим успешно создан! Соединение через: %s", stream.Conn().RemoteMultiaddr())
-						log.Println("🎉 Начинаем чат!")
-						runChat(stream, node)
-						// Успешно подключились и запустили чат, выходим из программы.
-						// В реальном приложении здесь будет другая логика.
+						log.Printf("✅ Найден пир через Rendezvous: %s", p.ID)
+						peerChan <- p
+					}
+				}()
+			}
+			// Поиск по CID
+			if *useCID {
+				searchWg.Add(1)
+				go func() {
+					defer searchWg.Done()
+					nickCID, err := getCIDForNick(*findNick)
+					if err != nil {
+						log.Printf("Ошибка создания CID для поиска: %v", err)
 						return
 					}
-
-					time.Sleep(15 * time.Second) // Повторяем поиск каждые 15 секунд
-				}
+					log.Printf("🔍 Начинаем поиск по CID: %s", nickCID)
+					providers := kademliaDHT.FindProvidersAsync(ctx, nickCID, 0)
+					for p := range providers {
+						if p.ID == node.ID() {
+							continue
+						}
+						log.Printf("✅ Найден пир через CID: %s", p.ID)
+						peerChan <- p
+					}
+				}()
 			}
+		}
+
+		// Горутина для закрытия канала после завершения всех поисков
+		go func() {
+			searchWg.Wait()
+			close(peerChan)
 		}()
 
-		log.Println("Поиск пиров запущен. Ожидание...")
+		// --- Логика подключения к найденным пирам ---
+		var connectedPeer peer.ID
+		var connectedPeerLock sync.Mutex
+
+		for p := range peerChan {
+			// Проверяем, не подключились ли мы уже к кому-то
+			connectedPeerLock.Lock()
+			if connectedPeer != "" {
+				connectedPeerLock.Unlock()
+				break
+			}
+			connectedPeerLock.Unlock()
+
+			log.Printf("🌀 Попытка подключения к пиру: %s. Адреса: %v", p.ID, p.Addrs)
+			ctxConnect, cancelConnect := context.WithTimeout(ctx, 90*time.Second)
+			if err := node.Connect(ctxConnect, p); err != nil {
+				log.Printf("❌ Не удалось подключиться к %s: %v", p.ID.ShortString(), err)
+				cancelConnect()
+				continue
+			}
+			cancelConnect()
+
+			log.Printf("✅ УСПЕШНОЕ СОЕДИНЕНИЕ с %s!", p.ID.ShortString())
+			streamCtx, streamCancel := context.WithTimeout(ctx, 60*time.Second)
+			stream, err := node.NewStream(streamCtx, p.ID, protocolID)
+			streamCancel()
+
+			if err != nil {
+				log.Printf("   ❌ Не удалось открыть стрим: %v", err)
+				continue
+			}
+
+			// Устанавливаем флаг, что мы подключились, чтобы остановить другие попытки
+			connectedPeerLock.Lock()
+			connectedPeer = p.ID
+			connectedPeerLock.Unlock()
+
+			log.Printf("   ✅ Стрим успешно создан! Соединение через: %s", stream.Conn().RemoteMultiaddr())
+			log.Println("🎉 Начинаем чат!")
+			runChat(stream)
+			goto End // Выходим из программы после успешного чата
+		}
 	}
 
-	// Ожидаем сигнала завершения (Ctrl+C)
+End:
+	// Ожидаем сигнала завершения (Ctrl+C), если мы в режиме слушателя или после чата
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
 	<-ch
@@ -268,21 +370,16 @@ func main() {
 func handleStream(stream network.Stream) {
 	remotePeer := stream.Conn().RemotePeer()
 	log.Printf("📡 Получен новый стрим от %s", remotePeer.ShortString())
-	runChat(stream, nil)
+	runChat(stream)
 }
 
-func runChat(stream network.Stream, node host.Host) {
-	// Создаем буферы для чтения и записи
+func runChat(stream network.Stream) {
 	reader := bufio.NewReader(stream)
 	writer := bufio.NewWriter(stream)
-
-	// Создаем каналы для координации горутин
-	// out: для чтения из stdin и отправки в сеть
-	// done: для завершения работы
 	out := make(chan string)
 	done := make(chan struct{})
 
-	// --- Горутина для чтения из сети и вывода в stdout ---
+	// Горутина для чтения из сети
 	go func() {
 		defer close(done)
 		for {
@@ -297,42 +394,43 @@ func runChat(stream network.Stream, node host.Host) {
 		}
 	}()
 
-	// --- Горутина для записи в сеть ---
+	// Горутина для записи в сеть
 	go func() {
-		for {
-			select {
-			case <-done:
+		for msg := range out {
+			_, err := writer.WriteString(msg)
+			if err != nil {
+				log.Printf("Ошибка записи для %s: %v", stream.Conn().RemotePeer().ShortString(), err)
 				return
-			case msg := <-out:
-				_, err := writer.WriteString(msg)
-				if err != nil {
-					log.Printf("Ошибка записи для %s: %v", stream.Conn().RemotePeer().ShortString(), err)
-					return
-				}
-				err = writer.Flush()
-				if err != nil {
-					log.Printf("Ошибка flush для %s: %v", stream.Conn().RemotePeer().ShortString(), err)
-					return
-				}
+			}
+			err = writer.Flush()
+			if err != nil {
+				log.Printf("Ошибка flush для %s: %v", stream.Conn().RemotePeer().ShortString(), err)
+				return
 			}
 		}
 	}()
 
-	// --- Основной цикл: чтение из stdin в текущей горутине ---
+	// Основной цикл для чтения из stdin
 	stdReader := bufio.NewReader(os.Stdin)
 	for {
 		select {
 		case <-done:
 			log.Println("Собеседник отключился.")
+			close(out)
 			return
 		default:
 			fmt.Print("> ")
 			sendData, err := stdReader.ReadString('\n')
 			if err != nil {
 				log.Printf("Ошибка чтения stdin: %v", err)
+				close(out)
 				return
 			}
-			out <- sendData
+			// Неблокирующая отправка в канал
+			select {
+			case out <- sendData:
+			case <-done:
+			}
 		}
 	}
 }
