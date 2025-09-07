@@ -9,7 +9,7 @@ import (
 	// Импортируем наши новые пакеты
 	newcore "OwlWhisper/cmd/fyne-gui/new-core" // <-- Убедитесь, что путь верный
 
-	"OwlWhisper/cmd/fyne-gui/ui" // <-- Убедитесь, что путь верный
+	ui "OwlWhisper/cmd/fyne-gui/ui" // <-- Убедитесь, что путь верный
 )
 
 func main() {
