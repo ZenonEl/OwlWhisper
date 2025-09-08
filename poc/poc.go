@@ -62,6 +62,9 @@ func main() {
 	useRendezvous := flag.Bool("find-rendezvous", true, "Использовать Rendezvous для поиска по нику")
 	useCID := flag.Bool("find-cid", true, "Использовать CID для поиска по нику")
 
+	forcePrivate := flag.Bool("forcePrivate", true, "Принудительный режим за NAT")
+	forcePublic := flag.Bool("forcePublic", false, "Принудительный режим без NAT")
+
 	flag.Parse()
 
 	if *myNick == "" {
@@ -99,14 +102,8 @@ func main() {
 
 	var kademliaDHT *dht.IpfsDHT
 
-	// --- Создание Connection Manager для стабильности соединений ---
-	// cm, err := connmgr.NewConnManager(100, 400, connmgr.WithGracePeriod(time.Minute))
-	// if err != nil {
-	// 	log.Fatalf("Failed to create connection manager: %v", err)
-	// }
-
 	// --- "Ультимативная" конфигурация хоста ---
-	node, err := libp2p.New(
+	opts := []libp2p.Option{
 		libp2p.Identity(priv),
 		libp2p.ListenAddrStrings(
 			"/ip4/0.0.0.0/tcp/0",
@@ -122,7 +119,6 @@ func main() {
 		// Двойное шифрование для максимальной совместимости
 		libp2p.Security(noise.ID, noise.New),
 		libp2p.Security(tls.ID, tls.New),
-		//libp2p.ConnectionManager(cm),
 		// Все механизмы обхода NAT
 		libp2p.NATPortMap(),
 		libp2p.EnableHolePunching(),
@@ -156,10 +152,19 @@ func main() {
 			}()
 			return ch
 		},
-			autorelay.WithBootDelay(2*time.Second), // Уменьшаем задержку для быстрого старта
-			autorelay.WithMaxCandidates(10),        // Увеличиваем количество кандидатов
+			autorelay.WithBootDelay(2*time.Second),
+			autorelay.WithMaxCandidates(10),
 		),
-	)
+	}
+
+	if *forcePrivate {
+		opts = append(opts, libp2p.ForceReachabilityPrivate())
+	} else if *forcePublic {
+		opts = append(opts, libp2p.ForceReachabilityPublic())
+	}
+
+	node, err := libp2p.New(opts...)
+
 	if err != nil {
 		log.Fatalf("Ошибка создания хоста: %v", err)
 	}
