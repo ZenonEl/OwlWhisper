@@ -14,12 +14,19 @@ import (
 type MessageDispatcher struct {
 	contactService *ContactService
 	chatService    *ChatService
+	ui             AppUIProvider
 }
 
-func NewMessageDispatcher(contactService *ContactService, chatService *ChatService) *MessageDispatcher {
+type AppUIProvider interface {
+	OnProfileReceived(senderID string, profile *protocol.ProfileInfo)
+	// В будущем здесь будут другие методы, например, OnContactRequestReceived
+}
+
+func NewMessageDispatcher(cs *ContactService, chs *ChatService, ui AppUIProvider) *MessageDispatcher {
 	return &MessageDispatcher{
-		contactService: contactService,
-		chatService:    chatService,
+		contactService: cs,
+		chatService:    chs,
+		ui:             ui,
 	}
 }
 
@@ -32,32 +39,55 @@ func (d *MessageDispatcher) HandleIncomingData(senderID string, data []byte) {
 		return
 	}
 
-	// 2. Проверяем, какой тип полезной нагрузки (payload) внутри конверта.
-	// Это и есть наша "сортировка".
-	switch pld := envelope.Payload.(type) {
-	case *protocol.Envelope_Content:
-		// Это сообщение с контентом (текст, файл и т.д.)
-		content := pld.Content
-		if textMsg := content.GetText(); textMsg != nil {
-			// Если внутри текст, передаем его в ChatService
-			d.chatService.ProcessTextMessage(senderID, textMsg)
-		}
-		// TODO: В будущем здесь будет обработка файлов (content.GetFile())
+	// 2. ИЗМЕНЕНО: Проверяем, какой тип полезной нагрузки внутри:
+	// сообщение для чата или для управления контактами.
+	switch payload := envelope.Payload.(type) {
+	case *protocol.Envelope_ChatMessage:
+		// Это сообщение для чата, обрабатываем его контент.
+		d.handleChatMessage(senderID, payload.ChatMessage)
 
-	case *protocol.Envelope_ProfileRequest:
-		// Нас "пингуют" с запросом профиля.
-		log.Printf("INFO: [Dispatcher] Получен ProfileRequest от %s", senderID)
-		d.contactService.RespondToProfileRequest(senderID)
-
-	case *protocol.Envelope_ProfileResponse:
-		// Нам прислали ответ с профилем.
-		log.Printf("INFO: [Dispatcher] Получен ProfileResponse от %s", senderID)
-		d.contactService.HandleProfileResponse(senderID, pld.ProfileResponse)
-
-	case *protocol.Envelope_ReadReceipts:
-		// TODO: Обработка уведомлений о прочтении
+	case *protocol.Envelope_ContactMessage:
+		// Это сообщение для управления контактами.
+		d.handleContactMessage(senderID, payload.ContactMessage)
 
 	default:
 		log.Printf("WARN: [Dispatcher] Получен Envelope с неизвестным типом payload от %s", senderID)
+	}
+}
+
+// handleChatMessage обрабатывает сообщения, относящиеся к чатам.
+func (d *MessageDispatcher) handleChatMessage(senderID string, msg *protocol.ChatMessage) {
+	switch content := msg.Content.(type) {
+	case *protocol.ChatMessage_Text:
+		d.chatService.ProcessTextMessage(senderID, content.Text)
+
+	case *protocol.ChatMessage_File:
+		// TODO: Логика обработки файлов
+
+	case *protocol.ChatMessage_ReadReceipts:
+		// TODO: Логика обработки статусов прочтения
+	}
+}
+
+// handleContactMessage обрабатывает сообщения для управления контактами.
+func (d *MessageDispatcher) handleContactMessage(senderID string, msg *protocol.ContactMessage) {
+	switch typ := msg.Type.(type) {
+	case *protocol.ContactMessage_ProfileRequest:
+		// Нас "пингуют" с запросом профиля. Нужно ответить.
+		log.Printf("INFO: [Dispatcher] Получен ProfileRequest от %s", senderID)
+		d.contactService.RespondToProfileRequest(senderID)
+
+	case *protocol.ContactMessage_ProfileResponse:
+		// Нам прислали ответ с профилем.
+		log.Printf("INFO: [Dispatcher] Получен ProfileResponse от %s", senderID)
+		d.ui.OnProfileReceived(senderID, typ.ProfileResponse.GetProfile())
+
+	case *protocol.ContactMessage_ContactRequest:
+		// НОВОЕ: Обрабатываем запрос на добавление в контакты
+		d.contactService.HandleContactRequest(senderID, typ.ContactRequest)
+
+	case *protocol.ContactMessage_ContactAccept:
+		// НОВОЕ: Обрабатываем подтверждение дружбы
+		d.contactService.HandleContactAccept(senderID, typ.ContactAccept)
 	}
 }
