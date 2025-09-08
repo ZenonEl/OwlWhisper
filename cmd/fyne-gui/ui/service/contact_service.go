@@ -79,7 +79,7 @@ func (p *InMemoryContactProvider) AddContact(contact *Contact) {
 // ContactService управляет всей бизнес-логикой, связанной с контактами.
 type ContactService struct {
 	core      newcore.ICoreController
-	provider  ContactProvider
+	Provider  ContactProvider
 	onUpdate  func()   // Callback для обновления UI
 	myProfile *Contact // Профиль текущего пользователя
 }
@@ -95,7 +95,7 @@ func NewContactService(core newcore.ICoreController, onUpdate func()) *ContactSe
 
 	cs := &ContactService{
 		core:      core,
-		provider:  NewInMemoryContactProvider(),
+		Provider:  NewInMemoryContactProvider(),
 		onUpdate:  onUpdate,
 		myProfile: myProfile,
 	}
@@ -108,7 +108,7 @@ func NewContactService(core newcore.ICoreController, onUpdate func()) *ContactSe
 
 // GetContacts возвращает список всех контактов.
 func (cs *ContactService) GetContacts() []*Contact {
-	return cs.provider.GetContacts()
+	return cs.Provider.GetContacts()
 }
 
 // HandleProfileResponse обрабатывает ответ на наш "пинг".
@@ -124,7 +124,7 @@ func (cs *ContactService) HandleProfileResponse(senderID string, res *protocol.P
 		Status:        StatusOnline,
 	}
 
-	cs.provider.AddContact(contact)
+	cs.Provider.AddContact(contact)
 	log.Printf("INFO: [ContactService] Профиль для %s обновлен: %s", senderID[:8], contact.FullAddress())
 	cs.onUpdate() // Уведомляем UI, что список контактов изменился
 }
@@ -164,7 +164,7 @@ func (cs *ContactService) UpdateMyProfile(peerID string) {
 	cs.myProfile.Discriminator = peerID[len(peerID)-6:]
 
 	// Теперь, когда у нас есть правильный PeerID, добавляем себя в хранилище.
-	cs.provider.AddContact(cs.myProfile)
+	cs.Provider.AddContact(cs.myProfile)
 
 	log.Printf("INFO: [ContactService] Профиль инициализирован: %s", cs.myProfile.FullAddress())
 }
