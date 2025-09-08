@@ -22,6 +22,8 @@ type AppUI struct {
 	statusLabel    *widget.Label
 	coreController newcore.ICoreController
 	contactService *services.ContactService
+	chatService    *services.ChatService       // <-- НОВОЕ ПОЛЕ
+	dispatcher     *services.MessageDispatcher // <-- НОВОЕ ПОЛЕ
 	app            fyne.App
 	mainWindow     fyne.Window
 
@@ -53,12 +55,23 @@ func NewAppUI(core newcore.ICoreController) *AppUI {
 	ui.peerIDLabelText.Set("PeerID: загрузка...")
 	ui.statusLabelText.Set("Статус: инициализация...")
 
+	// --- ИНИЦИАЛИЗАЦИЯ СЕРВИСОВ ---
+	// 1. Создаем ContactService
 	ui.contactService = services.NewContactService(core, func() {
-		// Callback от ContactService теперь тоже работает через Data Binding
 		ui.refreshContacts()
 	})
 
-	win.SetContent(ui.buildUI())
+	// 2. Создаем ChatService
+	// ИСПРАВЛЕНО: Передаем не ui.contactService, а ui.contactService.Provider
+	// который как раз и реализует интерфейс ContactProvider.
+	ui.chatService = services.NewChatService(core, ui.contactService.Provider, func(formattedMessage string) {
+		ui.messages.Append(formattedMessage)
+	})
+
+	// 3. Создаем Диспетчер... (без изменений)
+	ui.dispatcher = services.NewMessageDispatcher(ui.contactService, ui.chatService)
+
+	win.SetContent(ui.buildUI()) // buildUI теперь не принимает аргументов
 	win.Resize(fyne.NewSize(800, 600))
 	return ui
 }
@@ -78,6 +91,7 @@ func (ui *AppUI) buildUI() fyne.CanvasObject {
 	// ИСПОЛЬЗУЕМ WIDGET.NEW...WITHDATA для привязки
 	ui.peerIDLabel = widget.NewLabelWithData(ui.peerIDLabelText)
 	ui.statusLabel = widget.NewLabelWithData(ui.statusLabelText)
+	ui.peerIDLabel.Selectable = true
 
 	contactsList := widget.NewListWithData(
 		ui.contacts, // <-- Привязываем к списку контактов
@@ -147,22 +161,20 @@ func (ui *AppUI) eventLoop() {
 		switch event.Type {
 		case "CoreReady":
 			if payload, ok := event.Payload.(newcore.CoreReadyPayload); ok {
-				// БЕЗОПАСНОЕ ОБНОВЛЕНИЕ: Просто меняем данные, Fyne обновит виджет сам.
 				ui.peerIDLabelText.Set("PeerID: " + payload.PeerID)
 				ui.contactService.UpdateMyProfile(payload.PeerID)
 			}
+
 		case "NewMessage":
 			if payload, ok := event.Payload.(newcore.NewMessagePayload); ok {
-				msgText := string(payload.Data)
-				senderShort := payload.SenderID[:8]
-				fullMessage := fmt.Sprintf("[%s]: %s", senderShort, msgText)
-				// БЕЗОПАСНОЕ ОБНОВЛЕНИЕ
-				ui.messages.Append(fullMessage)
+				// ВСЯ СЛОЖНАЯ ЛОГИКА ТЕПЕРЬ ЗДЕСЬ:
+				// Просто передаем сырые данные в диспетчер.
+				ui.dispatcher.HandleIncomingData(payload.SenderID, payload.Data)
 			}
+
 			// case "PeerConnected", "PeerDisconnected":
 			// 	// Обновляем статусы контактов и затем UI
-			// 	//ui.contactService.UpdateContactStatuses(ui.coreController.GetConnectedPeers())
-			// }
+			// 	ui.contactService.UpdateContactStatuses(ui.coreController.GetConnectedPeers())
 		}
 	}
 }
