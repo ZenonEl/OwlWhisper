@@ -4,6 +4,17 @@ package newcore
 
 import "time"
 
+type Reachability string
+
+const (
+	// ReachabilityPublic - узел считает, что у него "белый" IP.
+	ReachabilityPublic Reachability = "public"
+	// ReachabilityPrivate - узел считает, что он за NAT.
+	ReachabilityPrivate Reachability = "private"
+	// ReachabilityUnknown - libp2p сам определит достижимость (рекомендуется).
+	ReachabilityUnknown Reachability = "unknown"
+)
+
 // Config определяет все настраиваемые параметры для запуска узла OwlWhisper.
 // Эта структура позволит нам гибко управлять поведением узла без изменения кода.
 type Config struct {
@@ -57,12 +68,18 @@ type Config struct {
 	// ВАЖНО: Это НЕ используется для поиска по конкретному никнейму.
 	RendezvousString string
 
+	// --- Политика Достижимости ---
+	ForceReachability Reachability // Принудительная установка статуса "за NAT" или "публичный".
+
 	// --- Тонкая Настройка (для продвинутых пользователей) ---
 
 	// AutoRelayBootDelay - задержка перед тем, как AutoRelay начнет свою работу.
 	AutoRelayBootDelay time.Duration
 	// AutoRelayMaxCandidates - сколько кандидатов в релеи будет проверять AutoRelay.
 	AutoRelayMaxCandidates int
+
+	// Период, с которым мы повторно анонсируем себя в сети.
+	AnnounceInterval time.Duration
 }
 
 // DefaultConfig возвращает рекомендуемую конфигурацию "по умолчанию",
@@ -95,7 +112,12 @@ func DefaultConfig() Config {
 
 		RendezvousString: "owl-whisper-rendezvous-v1",
 
+		// По умолчанию, позволяем libp2p самому определять, за NAT мы или нет.
+		ForceReachability: ReachabilityUnknown,
+
+		// Параметры из PoC
 		AutoRelayBootDelay:     2 * time.Second,
 		AutoRelayMaxCandidates: 10,
+		AnnounceInterval:       15 * time.Second, // Агрессивное анонсирование для быстрой отладки
 	}
 }

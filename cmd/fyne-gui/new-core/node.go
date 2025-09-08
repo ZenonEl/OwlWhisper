@@ -5,6 +5,7 @@ package newcore
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
@@ -98,7 +99,17 @@ func NewNode(ctx context.Context, privKey crypto.PrivKey, cfg Config) (*Node, er
 			autorelay.WithMaxCandidates(cfg.AutoRelayMaxCandidates)))
 	}
 
-	// 5. Создаем узел libp2p со всеми собранными опциями
+	// --- ШАГ 5: Устанавливаем политику достижимости ---
+	switch cfg.ForceReachability {
+	case ReachabilityPublic:
+		opts = append(opts, libp2p.ForceReachabilityPublic())
+	case ReachabilityPrivate:
+		opts = append(opts, libp2p.ForceReachabilityPrivate())
+	case ReachabilityUnknown:
+		// Ничего не делаем, libp2p сам определит
+	}
+
+	// --- ФИНАЛ: Создаем узел libp2p со всеми собранными опциями ---
 	host, err := libp2p.New(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("не удалось создать libp2p узел: %w", err)
@@ -138,8 +149,7 @@ func parseAddrInfo(addrs []string) []peer.AddrInfo {
 	for _, addrStr := range addrs {
 		addrInfo, err := peer.AddrInfoFromString(addrStr)
 		if err != nil {
-			// В реальном коде здесь должно быть логирование
-			fmt.Printf("Предупреждение: не удалось распарсить адрес '%s': %v\n", addrStr, err)
+			log.Printf("Предупреждение: не удалось распарсить адрес '%s': %v\n", addrStr, err)
 			continue
 		}
 		addrInfos = append(addrInfos, *addrInfo)

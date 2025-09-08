@@ -120,14 +120,18 @@ func (c *CoreController) Start() error {
 }
 
 func (c *CoreController) Stop() error {
-	log.Println("INFO: [Controller] Остановка ядра...")
-	c.cancel() // Отменяем контекст, чтобы остановить все горутины
+	Info("[Controller] Остановка ядра...")
+	c.cancel()
+	if c.node != nil {
+		if err := c.node.Close(); err != nil {
+			return err
+		}
+	}
 	close(c.eventChan)
-	return c.node.Close()
+	return nil
 }
 
 func (c *CoreController) GetMyPeerID() string {
-	// ИСПРАВЛЕНО: Добавляем проверку, чтобы избежать паники
 	if c.node == nil || c.node.Host() == nil {
 		return ""
 	}
@@ -183,7 +187,6 @@ func (c *CoreController) FindPeer(peerIDStr string) (*peer.AddrInfo, error) {
 	findCtx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
 	defer cancel()
 
-	// ИСПРАВЛЕНО: dht.FindPeer возвращает peer.AddrInfo, а не *peer.AddrInfo
 	addrInfo, err := c.discovery.DHT().FindPeer(findCtx, peerID)
 	if err != nil {
 		return nil, err // dht.FindPeer уже возвращает понятные ошибки
@@ -210,8 +213,6 @@ func (c *CoreController) FindProvidersForContent(contentID string) ([]peer.AddrI
 	findCtx, cancel := context.WithTimeout(c.ctx, 60*time.Second)
 	defer cancel()
 
-	// ИСПРАВЛЕНО: Используем актуальную блокирующую функцию FindProviders,
-	// которая сразу возвращает слайс.
 	allProviders, err := c.discovery.DHT().FindProviders(findCtx, cid)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка при поиске провайдеров в DHT: %w", err)
@@ -308,3 +309,4 @@ func (n *networkNotifee) Disconnected(net network.Network, conn network.Conn) {
 func (n *networkNotifee) Listen(net network.Network, ma multiaddr.Multiaddr)      {}
 func (n *networkNotifee) ListenClose(net network.Network, ma multiaddr.Multiaddr) {}
 func (n *networkNotifee) OpenedStream(net network.Network, s network.Stream)      {}
+func (n *networkNotifee) ClosedStream(net network.Network, s network.Stream)      {}

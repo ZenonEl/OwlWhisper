@@ -6,6 +6,7 @@ import (
 	"context"
 	"log"
 	"sync"
+	"time"
 
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/host"
@@ -87,20 +88,28 @@ func (dm *DiscoveryManager) startXxxMDNS() {
 
 // startXxxDHT подключается к bootstrap-узлам и запускает обнаружение в глобальной сети.
 func (dm *DiscoveryManager) startXxxDHT() {
+	// 1. Подключаемся к bootstrap-узлам.
 	Info("[DHT] Подключение к bootstrap-узлам...")
 	if err := dm.dht.Bootstrap(dm.ctx); err != nil {
 		Error("[DHT] Ошибка bootstrap: %v", err)
 		return
 	}
-	Info("[DHT] Bootstrap завершен.")
+	Info("[DHT] Bootstrap DHT завершен.")
 
-	// Принудительное подключение, как в PoC
+	// 2. Принудительно подключаемся к нескольким bootstrap-пирам, как в PoC.
 	var wg sync.WaitGroup
-	for _, maddr := range dht.DefaultBootstrapPeers {
+	// Объединяем стандартные и пользовательские bootstrap-узлы
+	allBootstrapAddrs := append(dht.DefaultBootstrapPeers, parseMultiaddrs(dm.cfg.CustomBootstrapNodes)...)
+
+	for _, maddr := range allBootstrapAddrs {
 		wg.Add(1)
 		go func(peerMaddr multiaddr.Multiaddr) {
 			defer wg.Done()
-			peerInfo, _ := peer.AddrInfoFromP2pAddr(peerMaddr)
+			peerInfo, err := peer.AddrInfoFromP2pAddr(peerMaddr)
+			if err != nil {
+				Warn("[DHT] Не удалось распарсить bootstrap-адрес: %v", err)
+				return
+			}
 			if err := dm.host.Connect(dm.ctx, *peerInfo); err != nil {
 				// Warn("[DHT] Не удалось подключиться к bootstrap-пиру %s: %v", peerInfo.ID.ShortString(), err)
 			} else {
@@ -110,30 +119,60 @@ func (dm *DiscoveryManager) startXxxDHT() {
 	}
 	wg.Wait()
 
-	// --- ИНТЕГРАЦИЯ ЛОГИКИ RENDEZVOUS ИЗ PoC ---
+	// 3. Используем RoutingDiscovery для Rendezvous-механизма из PoC.
 	routingDiscovery := routing.NewRoutingDiscovery(dm.dht)
 
-	// 1. Анонсируем себя в "общей комнате"
-	Info("[DHT] Начинаем анонсирование в rendezvous-точке: %s", dm.cfg.RendezvousString)
-	dutil.Advertise(dm.ctx, routingDiscovery, dm.cfg.RendezvousString)
-	Info("[DHT] Анонсирование запущено.")
-
-	// 2. Ищем других в "общей комнате"
-	Info("[DHT] Начинаем поиск пиров в rendezvous-точке: %s", dm.cfg.RendezvousString)
-	peerChan, err := routingDiscovery.FindPeers(dm.ctx, dm.cfg.RendezvousString)
-	if err != nil {
-		Error("[DHT] Ошибка поиска пиров по rendezvous: %v", err)
-		return
-	}
-
-	// Обрабатываем найденных "случайных" пиров
+	// 4. Постоянно анонсируем свое присутствие в "общей комнате".
 	go func() {
-		for p := range peerChan {
-			if p.ID == dm.host.ID() {
-				continue
+		ticker := time.NewTicker(dm.cfg.AnnounceInterval)
+		defer ticker.Stop()
+		for {
+			Info("[DHT] Анонсируем себя в rendezvous-точке: %s", dm.cfg.RendezvousString)
+			dutil.Advertise(dm.ctx, routingDiscovery, dm.cfg.RendezvousString)
+			select {
+			case <-dm.ctx.Done():
+				return
+			case <-ticker.C:
 			}
-			Info("[DHT] Rendezvous: Найден пир: %s", p.ID.ShortString())
-			dm.onPeerFound(p) // Сообщаем наверх о находке
 		}
 	}()
+
+	// 5. Постоянно ищем других пиров в той же "комнате".
+	go func() {
+		for {
+			Info("[DHT] Ищем других пиров в rendezvous-точке: %s", dm.cfg.RendezvousString)
+			peerChan, err := routingDiscovery.FindPeers(dm.ctx, dm.cfg.RendezvousString)
+			if err != nil {
+				Error("[DHT] Ошибка поиска пиров по rendezvous: %v", err)
+			} else {
+				for p := range peerChan {
+					if p.ID == dm.host.ID() {
+						continue // Пропускаем себя
+					}
+					Info("[DHT] Rendezvous: Найден пир: %s", p.ID.ShortString())
+					dm.onPeerFound(p) // Сообщаем наверх о находке
+				}
+			}
+			select {
+			case <-dm.ctx.Done():
+				return
+			// Пауза между циклами поиска, чтобы не перегружать сеть.
+			case <-time.After(dm.cfg.AnnounceInterval * 2):
+			}
+		}
+	}()
+}
+
+// parseMultiaddrs - helper-функция для преобразования строк в multi-адреса.
+func parseMultiaddrs(addrs []string) []multiaddr.Multiaddr {
+	var multiaddrs []multiaddr.Multiaddr
+	for _, addrStr := range addrs {
+		maddr, err := multiaddr.NewMultiaddr(addrStr)
+		if err != nil {
+			Warn("Не удалось распарсить multi-адрес '%s': %v", addrStr, err)
+			continue
+		}
+		multiaddrs = append(multiaddrs, maddr)
+	}
+	return multiaddrs
 }
