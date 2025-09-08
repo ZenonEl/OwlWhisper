@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.8
 // 	protoc        v6.32.0
-// source: chat.proto
+// source: cmd/fyne-gui/new-core/protocol/chat.proto
 
 package __
 
@@ -21,67 +21,67 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-type Envelope_ChatType int32
+type ChatMessage_ChatType int32
 
 const (
-	Envelope_PRIVATE Envelope_ChatType = 0 // Личное сообщение (1-на-1)
-	Envelope_GROUP   Envelope_ChatType = 1 // Групповой чат
+	ChatMessage_PRIVATE ChatMessage_ChatType = 0 // Личное сообщение (1-на-1)
+	ChatMessage_GROUP   ChatMessage_ChatType = 1 // Групповой чат
 )
 
-// Enum value maps for Envelope_ChatType.
+// Enum value maps for ChatMessage_ChatType.
 var (
-	Envelope_ChatType_name = map[int32]string{
+	ChatMessage_ChatType_name = map[int32]string{
 		0: "PRIVATE",
 		1: "GROUP",
 	}
-	Envelope_ChatType_value = map[string]int32{
+	ChatMessage_ChatType_value = map[string]int32{
 		"PRIVATE": 0,
 		"GROUP":   1,
 	}
 )
 
-func (x Envelope_ChatType) Enum() *Envelope_ChatType {
-	p := new(Envelope_ChatType)
+func (x ChatMessage_ChatType) Enum() *ChatMessage_ChatType {
+	p := new(ChatMessage_ChatType)
 	*p = x
 	return p
 }
 
-func (x Envelope_ChatType) String() string {
+func (x ChatMessage_ChatType) String() string {
 	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
 }
 
-func (Envelope_ChatType) Descriptor() protoreflect.EnumDescriptor {
-	return file_chat_proto_enumTypes[0].Descriptor()
+func (ChatMessage_ChatType) Descriptor() protoreflect.EnumDescriptor {
+	return file_cmd_fyne_gui_new_core_protocol_chat_proto_enumTypes[0].Descriptor()
 }
 
-func (Envelope_ChatType) Type() protoreflect.EnumType {
-	return &file_chat_proto_enumTypes[0]
+func (ChatMessage_ChatType) Type() protoreflect.EnumType {
+	return &file_cmd_fyne_gui_new_core_protocol_chat_proto_enumTypes[0]
 }
 
-func (x Envelope_ChatType) Number() protoreflect.EnumNumber {
+func (x ChatMessage_ChatType) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
-// Deprecated: Use Envelope_ChatType.Descriptor instead.
-func (Envelope_ChatType) EnumDescriptor() ([]byte, []int) {
-	return file_chat_proto_rawDescGZIP(), []int{0, 0}
+// Deprecated: Use ChatMessage_ChatType.Descriptor instead.
+func (ChatMessage_ChatType) EnumDescriptor() ([]byte, []int) {
+	return file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescGZIP(), []int{1, 0}
 }
 
-// Envelope - "конверт" для каждого сообщения, передаваемого по сети.
+// Envelope - это "конверт", в который заворачивается каждое
+// сообщение, передаваемое по сети.
 type Envelope struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	MessageId     string                 `protobuf:"bytes,1,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`              // Уникальный ID конверта (UUID)
 	SenderId      string                 `protobuf:"bytes,2,opt,name=sender_id,json=senderId,proto3" json:"sender_id,omitempty"`                 // PeerID отправителя
 	TimestampUnix int64                  `protobuf:"varint,3,opt,name=timestamp_unix,json=timestampUnix,proto3" json:"timestamp_unix,omitempty"` // Время отправки
-	ChatType      Envelope_ChatType      `protobuf:"varint,4,opt,name=chat_type,json=chatType,proto3,enum=protocol.Envelope_ChatType" json:"chat_type,omitempty"`
-	ChatId        string                 `protobuf:"bytes,5,opt,name=chat_id,json=chatId,proto3" json:"chat_id,omitempty"` // ID чата (для групп - ID группы, для личных - PeerID собеседника)
+	// Содержимое сообщения. oneof гарантирует, что внутри будет
+	// что-то одно. Мы разделили сообщения на две категории:
+	// для чатов (прямых и групповых) и для управления контактами.
+	//
 	// Types that are valid to be assigned to Payload:
 	//
-	//	*Envelope_Content
-	//	*Envelope_ReadReceipts
-	//	*Envelope_ProfileInfo
-	//	*Envelope_ProfileRequest
-	//	*Envelope_ProfileResponse
+	//	*Envelope_ChatMessage
+	//	*Envelope_ContactMessage
 	Payload       isEnvelope_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -89,7 +89,7 @@ type Envelope struct {
 
 func (x *Envelope) Reset() {
 	*x = Envelope{}
-	mi := &file_chat_proto_msgTypes[0]
+	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -101,7 +101,7 @@ func (x *Envelope) String() string {
 func (*Envelope) ProtoMessage() {}
 
 func (x *Envelope) ProtoReflect() protoreflect.Message {
-	mi := &file_chat_proto_msgTypes[0]
+	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -114,7 +114,7 @@ func (x *Envelope) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Envelope.ProtoReflect.Descriptor instead.
 func (*Envelope) Descriptor() ([]byte, []int) {
-	return file_chat_proto_rawDescGZIP(), []int{0}
+	return file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *Envelope) GetMessageId() string {
@@ -138,20 +138,6 @@ func (x *Envelope) GetTimestampUnix() int64 {
 	return 0
 }
 
-func (x *Envelope) GetChatType() Envelope_ChatType {
-	if x != nil {
-		return x.ChatType
-	}
-	return Envelope_PRIVATE
-}
-
-func (x *Envelope) GetChatId() string {
-	if x != nil {
-		return x.ChatId
-	}
-	return ""
-}
-
 func (x *Envelope) GetPayload() isEnvelope_Payload {
 	if x != nil {
 		return x.Payload
@@ -159,46 +145,19 @@ func (x *Envelope) GetPayload() isEnvelope_Payload {
 	return nil
 }
 
-func (x *Envelope) GetContent() *Content {
+func (x *Envelope) GetChatMessage() *ChatMessage {
 	if x != nil {
-		if x, ok := x.Payload.(*Envelope_Content); ok {
-			return x.Content
+		if x, ok := x.Payload.(*Envelope_ChatMessage); ok {
+			return x.ChatMessage
 		}
 	}
 	return nil
 }
 
-func (x *Envelope) GetReadReceipts() *ReadReceipts {
+func (x *Envelope) GetContactMessage() *ContactMessage {
 	if x != nil {
-		if x, ok := x.Payload.(*Envelope_ReadReceipts); ok {
-			return x.ReadReceipts
-		}
-	}
-	return nil
-}
-
-func (x *Envelope) GetProfileInfo() *ProfileInfo {
-	if x != nil {
-		if x, ok := x.Payload.(*Envelope_ProfileInfo); ok {
-			return x.ProfileInfo
-		}
-	}
-	return nil
-}
-
-func (x *Envelope) GetProfileRequest() *ProfileRequest {
-	if x != nil {
-		if x, ok := x.Payload.(*Envelope_ProfileRequest); ok {
-			return x.ProfileRequest
-		}
-	}
-	return nil
-}
-
-func (x *Envelope) GetProfileResponse() *ProfileResponse {
-	if x != nil {
-		if x, ok := x.Payload.(*Envelope_ProfileResponse); ok {
-			return x.ProfileResponse
+		if x, ok := x.Payload.(*Envelope_ContactMessage); ok {
+			return x.ContactMessage
 		}
 	}
 	return nil
@@ -208,64 +167,47 @@ type isEnvelope_Payload interface {
 	isEnvelope_Payload()
 }
 
-type Envelope_Content struct {
-	Content *Content `protobuf:"bytes,6,opt,name=content,proto3,oneof"` // Полезная нагрузка (текст, файл)
+type Envelope_ChatMessage struct {
+	ChatMessage *ChatMessage `protobuf:"bytes,4,opt,name=chat_message,json=chatMessage,proto3,oneof"` // Сообщение, относящееся к чату
 }
 
-type Envelope_ReadReceipts struct {
-	ReadReceipts *ReadReceipts `protobuf:"bytes,7,opt,name=read_receipts,json=readReceipts,proto3,oneof"` // Уведомление о прочтении
+type Envelope_ContactMessage struct {
+	ContactMessage *ContactMessage `protobuf:"bytes,5,opt,name=contact_message,json=contactMessage,proto3,oneof"` // Сообщение для управления контактами
 }
 
-type Envelope_ProfileInfo struct {
-	ProfileInfo *ProfileInfo `protobuf:"bytes,8,opt,name=profile_info,json=profileInfo,proto3,oneof"` // Полная информация о профиле (для "рукопожатия")
-}
+func (*Envelope_ChatMessage) isEnvelope_Payload() {}
 
-type Envelope_ProfileRequest struct {
-	// ИЗМЕНЕНО: Наш "пинг" и "понг" для запроса профиля
-	ProfileRequest *ProfileRequest `protobuf:"bytes,9,opt,name=profile_request,json=profileRequest,proto3,oneof"` // Запрос на получение профиля
-}
+func (*Envelope_ContactMessage) isEnvelope_Payload() {}
 
-type Envelope_ProfileResponse struct {
-	ProfileResponse *ProfileResponse `protobuf:"bytes,10,opt,name=profile_response,json=profileResponse,proto3,oneof"` // Ответ с профилем
-}
-
-func (*Envelope_Content) isEnvelope_Payload() {}
-
-func (*Envelope_ReadReceipts) isEnvelope_Payload() {}
-
-func (*Envelope_ProfileInfo) isEnvelope_Payload() {}
-
-func (*Envelope_ProfileRequest) isEnvelope_Payload() {}
-
-func (*Envelope_ProfileResponse) isEnvelope_Payload() {}
-
-// ... (Content, TextMessage, FileMetadata, ReadReceipts без изменений) ...
-type Content struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Types that are valid to be assigned to Type:
+type ChatMessage struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	ChatType ChatMessage_ChatType   `protobuf:"varint,1,opt,name=chat_type,json=chatType,proto3,enum=protocol.ChatMessage_ChatType" json:"chat_type,omitempty"`
+	ChatId   string                 `protobuf:"bytes,2,opt,name=chat_id,json=chatId,proto3" json:"chat_id,omitempty"` // ID чата (для групп - ID группы, для личных - PeerID собеседника)
+	// Types that are valid to be assigned to Content:
 	//
-	//	*Content_Text
-	//	*Content_File
-	Type          isContent_Type `protobuf_oneof:"type"`
+	//	*ChatMessage_Text
+	//	*ChatMessage_File
+	//	*ChatMessage_ReadReceipts
+	Content       isChatMessage_Content `protobuf_oneof:"content"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *Content) Reset() {
-	*x = Content{}
-	mi := &file_chat_proto_msgTypes[1]
+func (x *ChatMessage) Reset() {
+	*x = ChatMessage{}
+	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *Content) String() string {
+func (x *ChatMessage) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*Content) ProtoMessage() {}
+func (*ChatMessage) ProtoMessage() {}
 
-func (x *Content) ProtoReflect() protoreflect.Message {
-	mi := &file_chat_proto_msgTypes[1]
+func (x *ChatMessage) ProtoReflect() protoreflect.Message {
+	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -276,63 +218,92 @@ func (x *Content) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use Content.ProtoReflect.Descriptor instead.
-func (*Content) Descriptor() ([]byte, []int) {
-	return file_chat_proto_rawDescGZIP(), []int{1}
+// Deprecated: Use ChatMessage.ProtoReflect.Descriptor instead.
+func (*ChatMessage) Descriptor() ([]byte, []int) {
+	return file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *Content) GetType() isContent_Type {
+func (x *ChatMessage) GetChatType() ChatMessage_ChatType {
 	if x != nil {
-		return x.Type
+		return x.ChatType
+	}
+	return ChatMessage_PRIVATE
+}
+
+func (x *ChatMessage) GetChatId() string {
+	if x != nil {
+		return x.ChatId
+	}
+	return ""
+}
+
+func (x *ChatMessage) GetContent() isChatMessage_Content {
+	if x != nil {
+		return x.Content
 	}
 	return nil
 }
 
-func (x *Content) GetText() *TextMessage {
+func (x *ChatMessage) GetText() *TextMessage {
 	if x != nil {
-		if x, ok := x.Type.(*Content_Text); ok {
+		if x, ok := x.Content.(*ChatMessage_Text); ok {
 			return x.Text
 		}
 	}
 	return nil
 }
 
-func (x *Content) GetFile() *FileMetadata {
+func (x *ChatMessage) GetFile() *FileMetadata {
 	if x != nil {
-		if x, ok := x.Type.(*Content_File); ok {
+		if x, ok := x.Content.(*ChatMessage_File); ok {
 			return x.File
 		}
 	}
 	return nil
 }
 
-type isContent_Type interface {
-	isContent_Type()
+func (x *ChatMessage) GetReadReceipts() *ReadReceipts {
+	if x != nil {
+		if x, ok := x.Content.(*ChatMessage_ReadReceipts); ok {
+			return x.ReadReceipts
+		}
+	}
+	return nil
 }
 
-type Content_Text struct {
-	Text *TextMessage `protobuf:"bytes,1,opt,name=text,proto3,oneof"`
+type isChatMessage_Content interface {
+	isChatMessage_Content()
 }
 
-type Content_File struct {
-	File *FileMetadata `protobuf:"bytes,2,opt,name=file,proto3,oneof"`
+type ChatMessage_Text struct {
+	Text *TextMessage `protobuf:"bytes,3,opt,name=text,proto3,oneof"` // Текстовое сообщение
 }
 
-func (*Content_Text) isContent_Type() {}
+type ChatMessage_File struct {
+	File *FileMetadata `protobuf:"bytes,4,opt,name=file,proto3,oneof"` // Метаданные файла
+}
 
-func (*Content_File) isContent_Type() {}
+type ChatMessage_ReadReceipts struct {
+	ReadReceipts *ReadReceipts `protobuf:"bytes,5,opt,name=read_receipts,json=readReceipts,proto3,oneof"` // Уведомления о прочтении
+}
+
+func (*ChatMessage_Text) isChatMessage_Content() {}
+
+func (*ChatMessage_File) isChatMessage_Content() {}
+
+func (*ChatMessage_ReadReceipts) isChatMessage_Content() {}
 
 type TextMessage struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	Body             string                 `protobuf:"bytes,1,opt,name=body,proto3" json:"body,omitempty"`
-	ReplyToMessageId string                 `protobuf:"bytes,2,opt,name=reply_to_message_id,json=replyToMessageId,proto3" json:"reply_to_message_id,omitempty"`
+	ReplyToMessageId string                 `protobuf:"bytes,2,opt,name=reply_to_message_id,json=replyToMessageId,proto3" json:"reply_to_message_id,omitempty"` // ID сообщения, на которое отвечаем
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
 
 func (x *TextMessage) Reset() {
 	*x = TextMessage{}
-	mi := &file_chat_proto_msgTypes[2]
+	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -344,7 +315,7 @@ func (x *TextMessage) String() string {
 func (*TextMessage) ProtoMessage() {}
 
 func (x *TextMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_chat_proto_msgTypes[2]
+	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -357,7 +328,7 @@ func (x *TextMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TextMessage.ProtoReflect.Descriptor instead.
 func (*TextMessage) Descriptor() ([]byte, []int) {
-	return file_chat_proto_rawDescGZIP(), []int{2}
+	return file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *TextMessage) GetBody() string {
@@ -386,7 +357,7 @@ type FileMetadata struct {
 
 func (x *FileMetadata) Reset() {
 	*x = FileMetadata{}
-	mi := &file_chat_proto_msgTypes[3]
+	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -398,7 +369,7 @@ func (x *FileMetadata) String() string {
 func (*FileMetadata) ProtoMessage() {}
 
 func (x *FileMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_chat_proto_msgTypes[3]
+	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -411,7 +382,7 @@ func (x *FileMetadata) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileMetadata.ProtoReflect.Descriptor instead.
 func (*FileMetadata) Descriptor() ([]byte, []int) {
-	return file_chat_proto_rawDescGZIP(), []int{3}
+	return file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *FileMetadata) GetFilename() string {
@@ -444,14 +415,14 @@ func (x *FileMetadata) GetHashSha256() string {
 
 type ReadReceipts struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	MessageIds    []string               `protobuf:"bytes,1,rep,name=message_ids,json=messageIds,proto3" json:"message_ids,omitempty"`
+	MessageIds    []string               `protobuf:"bytes,1,rep,name=message_ids,json=messageIds,proto3" json:"message_ids,omitempty"` // ID прочитанных сообщений
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ReadReceipts) Reset() {
 	*x = ReadReceipts{}
-	mi := &file_chat_proto_msgTypes[4]
+	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -463,7 +434,7 @@ func (x *ReadReceipts) String() string {
 func (*ReadReceipts) ProtoMessage() {}
 
 func (x *ReadReceipts) ProtoReflect() protoreflect.Message {
-	mi := &file_chat_proto_msgTypes[4]
+	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -476,7 +447,7 @@ func (x *ReadReceipts) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadReceipts.ProtoReflect.Descriptor instead.
 func (*ReadReceipts) Descriptor() ([]byte, []int) {
-	return file_chat_proto_rawDescGZIP(), []int{4}
+	return file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ReadReceipts) GetMessageIds() []string {
@@ -486,21 +457,137 @@ func (x *ReadReceipts) GetMessageIds() []string {
 	return nil
 }
 
-// ProfileInfo - информация о профиле пользователя для обмена между клиентами.
+// ContactMessage - это обертка для всех сообщений, связанных
+// с добавлением, верификацией и управлением контактами.
+type ContactMessage struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Type:
+	//
+	//	*ContactMessage_ProfileRequest
+	//	*ContactMessage_ProfileResponse
+	//	*ContactMessage_ContactRequest
+	//	*ContactMessage_ContactAccept
+	Type          isContactMessage_Type `protobuf_oneof:"type"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ContactMessage) Reset() {
+	*x = ContactMessage{}
+	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ContactMessage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ContactMessage) ProtoMessage() {}
+
+func (x *ContactMessage) ProtoReflect() protoreflect.Message {
+	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ContactMessage.ProtoReflect.Descriptor instead.
+func (*ContactMessage) Descriptor() ([]byte, []int) {
+	return file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *ContactMessage) GetType() isContactMessage_Type {
+	if x != nil {
+		return x.Type
+	}
+	return nil
+}
+
+func (x *ContactMessage) GetProfileRequest() *ProfileRequest {
+	if x != nil {
+		if x, ok := x.Type.(*ContactMessage_ProfileRequest); ok {
+			return x.ProfileRequest
+		}
+	}
+	return nil
+}
+
+func (x *ContactMessage) GetProfileResponse() *ProfileResponse {
+	if x != nil {
+		if x, ok := x.Type.(*ContactMessage_ProfileResponse); ok {
+			return x.ProfileResponse
+		}
+	}
+	return nil
+}
+
+func (x *ContactMessage) GetContactRequest() *ContactRequest {
+	if x != nil {
+		if x, ok := x.Type.(*ContactMessage_ContactRequest); ok {
+			return x.ContactRequest
+		}
+	}
+	return nil
+}
+
+func (x *ContactMessage) GetContactAccept() *ContactAccept {
+	if x != nil {
+		if x, ok := x.Type.(*ContactMessage_ContactAccept); ok {
+			return x.ContactAccept
+		}
+	}
+	return nil
+}
+
+type isContactMessage_Type interface {
+	isContactMessage_Type()
+}
+
+type ContactMessage_ProfileRequest struct {
+	ProfileRequest *ProfileRequest `protobuf:"bytes,1,opt,name=profile_request,json=profileRequest,proto3,oneof"` // "Пинг" - запрос профиля
+}
+
+type ContactMessage_ProfileResponse struct {
+	ProfileResponse *ProfileResponse `protobuf:"bytes,2,opt,name=profile_response,json=profileResponse,proto3,oneof"` // "Понг" - ответ с профилем
+}
+
+type ContactMessage_ContactRequest struct {
+	ContactRequest *ContactRequest `protobuf:"bytes,3,opt,name=contact_request,json=contactRequest,proto3,oneof"` // Запрос на добавление в контакты
+}
+
+type ContactMessage_ContactAccept struct {
+	ContactAccept *ContactAccept `protobuf:"bytes,4,opt,name=contact_accept,json=contactAccept,proto3,oneof"` // Подтверждение добавления
+}
+
+func (*ContactMessage_ProfileRequest) isContactMessage_Type() {}
+
+func (*ContactMessage_ProfileResponse) isContactMessage_Type() {}
+
+func (*ContactMessage_ContactRequest) isContactMessage_Type() {}
+
+func (*ContactMessage_ContactAccept) isContactMessage_Type() {}
+
+// ProfileInfo - публичная часть профиля пользователя.
 type ProfileInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Nickname      string                 `protobuf:"bytes,1,opt,name=nickname,proto3" json:"nickname,omitempty"`
 	Discriminator string                 `protobuf:"bytes,2,opt,name=discriminator,proto3" json:"discriminator,omitempty"`
 	DisplayName   string                 `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
 	AvatarHash    string                 `protobuf:"bytes,4,opt,name=avatar_hash,json=avatarHash,proto3" json:"avatar_hash,omitempty"`
-	Metadata      map[string]string      `protobuf:"bytes,5,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Metadata      map[string]string      `protobuf:"bytes,5,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // Доп. информация (версия клиента и т.д.)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ProfileInfo) Reset() {
 	*x = ProfileInfo{}
-	mi := &file_chat_proto_msgTypes[5]
+	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -512,7 +599,7 @@ func (x *ProfileInfo) String() string {
 func (*ProfileInfo) ProtoMessage() {}
 
 func (x *ProfileInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_chat_proto_msgTypes[5]
+	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -525,7 +612,7 @@ func (x *ProfileInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProfileInfo.ProtoReflect.Descriptor instead.
 func (*ProfileInfo) Descriptor() ([]byte, []int) {
-	return file_chat_proto_rawDescGZIP(), []int{5}
+	return file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ProfileInfo) GetNickname() string {
@@ -563,8 +650,7 @@ func (x *ProfileInfo) GetMetadata() map[string]string {
 	return nil
 }
 
-// НОВОЕ: Запрос профиля. Может быть пустым, сам факт получения
-// этого сообщения является запросом.
+// "Пинг": запрос на получение профиля.
 type ProfileRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -573,7 +659,7 @@ type ProfileRequest struct {
 
 func (x *ProfileRequest) Reset() {
 	*x = ProfileRequest{}
-	mi := &file_chat_proto_msgTypes[6]
+	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -585,7 +671,7 @@ func (x *ProfileRequest) String() string {
 func (*ProfileRequest) ProtoMessage() {}
 
 func (x *ProfileRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_chat_proto_msgTypes[6]
+	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -598,20 +684,20 @@ func (x *ProfileRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProfileRequest.ProtoReflect.Descriptor instead.
 func (*ProfileRequest) Descriptor() ([]byte, []int) {
-	return file_chat_proto_rawDescGZIP(), []int{6}
+	return file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescGZIP(), []int{7}
 }
 
-// НОВОЕ: Ответ на запрос профиля.
+// "Понг": ответ с профилем.
 type ProfileResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Profile       *ProfileInfo           `protobuf:"bytes,1,opt,name=profile,proto3" json:"profile,omitempty"` // Содержит актуальный профиль пользователя
+	Profile       *ProfileInfo           `protobuf:"bytes,1,opt,name=profile,proto3" json:"profile,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ProfileResponse) Reset() {
 	*x = ProfileResponse{}
-	mi := &file_chat_proto_msgTypes[7]
+	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -623,7 +709,7 @@ func (x *ProfileResponse) String() string {
 func (*ProfileResponse) ProtoMessage() {}
 
 func (x *ProfileResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_chat_proto_msgTypes[7]
+	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -636,7 +722,7 @@ func (x *ProfileResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProfileResponse.ProtoReflect.Descriptor instead.
 func (*ProfileResponse) Descriptor() ([]byte, []int) {
-	return file_chat_proto_rawDescGZIP(), []int{7}
+	return file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ProfileResponse) GetProfile() *ProfileInfo {
@@ -646,33 +732,121 @@ func (x *ProfileResponse) GetProfile() *ProfileInfo {
 	return nil
 }
 
-var File_chat_proto protoreflect.FileDescriptor
+// НОВОЕ: Запрос на добавление в контакты.
+// Содержит профиль отправителя, чтобы получатель знал, кого добавляет.
+type ContactRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SenderProfile *ProfileInfo           `protobuf:"bytes,1,opt,name=sender_profile,json=senderProfile,proto3" json:"sender_profile,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
 
-const file_chat_proto_rawDesc = "" +
+func (x *ContactRequest) Reset() {
+	*x = ContactRequest{}
+	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ContactRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ContactRequest) ProtoMessage() {}
+
+func (x *ContactRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ContactRequest.ProtoReflect.Descriptor instead.
+func (*ContactRequest) Descriptor() ([]byte, []int) {
+	return file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ContactRequest) GetSenderProfile() *ProfileInfo {
+	if x != nil {
+		return x.SenderProfile
+	}
+	return nil
+}
+
+// НОВОЕ: Подтверждение запроса на добавление.
+// Также содержит профиль для финальной синхронизации.
+type ContactAccept struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SenderProfile *ProfileInfo           `protobuf:"bytes,1,opt,name=sender_profile,json=senderProfile,proto3" json:"sender_profile,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ContactAccept) Reset() {
+	*x = ContactAccept{}
+	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ContactAccept) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ContactAccept) ProtoMessage() {}
+
+func (x *ContactAccept) ProtoReflect() protoreflect.Message {
+	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ContactAccept.ProtoReflect.Descriptor instead.
+func (*ContactAccept) Descriptor() ([]byte, []int) {
+	return file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *ContactAccept) GetSenderProfile() *ProfileInfo {
+	if x != nil {
+		return x.SenderProfile
+	}
+	return nil
+}
+
+var File_cmd_fyne_gui_new_core_protocol_chat_proto protoreflect.FileDescriptor
+
+const file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDesc = "" +
 	"\n" +
-	"\n" +
-	"chat.proto\x12\bprotocol\"\xa6\x04\n" +
+	")cmd/fyne-gui/new-core/protocol/chat.proto\x12\bprotocol\"\xf9\x01\n" +
 	"\bEnvelope\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1b\n" +
 	"\tsender_id\x18\x02 \x01(\tR\bsenderId\x12%\n" +
-	"\x0etimestamp_unix\x18\x03 \x01(\x03R\rtimestampUnix\x128\n" +
-	"\tchat_type\x18\x04 \x01(\x0e2\x1b.protocol.Envelope.ChatTypeR\bchatType\x12\x17\n" +
-	"\achat_id\x18\x05 \x01(\tR\x06chatId\x12-\n" +
-	"\acontent\x18\x06 \x01(\v2\x11.protocol.ContentH\x00R\acontent\x12=\n" +
-	"\rread_receipts\x18\a \x01(\v2\x16.protocol.ReadReceiptsH\x00R\freadReceipts\x12:\n" +
-	"\fprofile_info\x18\b \x01(\v2\x15.protocol.ProfileInfoH\x00R\vprofileInfo\x12C\n" +
-	"\x0fprofile_request\x18\t \x01(\v2\x18.protocol.ProfileRequestH\x00R\x0eprofileRequest\x12F\n" +
-	"\x10profile_response\x18\n" +
-	" \x01(\v2\x19.protocol.ProfileResponseH\x00R\x0fprofileResponse\"\"\n" +
+	"\x0etimestamp_unix\x18\x03 \x01(\x03R\rtimestampUnix\x12:\n" +
+	"\fchat_message\x18\x04 \x01(\v2\x15.protocol.ChatMessageH\x00R\vchatMessage\x12C\n" +
+	"\x0fcontact_message\x18\x05 \x01(\v2\x18.protocol.ContactMessageH\x00R\x0econtactMessageB\t\n" +
+	"\apayload\"\xac\x02\n" +
+	"\vChatMessage\x12;\n" +
+	"\tchat_type\x18\x01 \x01(\x0e2\x1e.protocol.ChatMessage.ChatTypeR\bchatType\x12\x17\n" +
+	"\achat_id\x18\x02 \x01(\tR\x06chatId\x12+\n" +
+	"\x04text\x18\x03 \x01(\v2\x15.protocol.TextMessageH\x00R\x04text\x12,\n" +
+	"\x04file\x18\x04 \x01(\v2\x16.protocol.FileMetadataH\x00R\x04file\x12=\n" +
+	"\rread_receipts\x18\x05 \x01(\v2\x16.protocol.ReadReceiptsH\x00R\freadReceipts\"\"\n" +
 	"\bChatType\x12\v\n" +
 	"\aPRIVATE\x10\x00\x12\t\n" +
 	"\x05GROUP\x10\x01B\t\n" +
-	"\apayload\"l\n" +
-	"\aContent\x12+\n" +
-	"\x04text\x18\x01 \x01(\v2\x15.protocol.TextMessageH\x00R\x04text\x12,\n" +
-	"\x04file\x18\x02 \x01(\v2\x16.protocol.FileMetadataH\x00R\x04fileB\x06\n" +
-	"\x04type\"P\n" +
+	"\acontent\"P\n" +
 	"\vTextMessage\x12\x12\n" +
 	"\x04body\x18\x01 \x01(\tR\x04body\x12-\n" +
 	"\x13reply_to_message_id\x18\x02 \x01(\tR\x10replyToMessageId\"\x87\x01\n" +
@@ -685,7 +859,13 @@ const file_chat_proto_rawDesc = "" +
 	"hashSha256\"/\n" +
 	"\fReadReceipts\x12\x1f\n" +
 	"\vmessage_ids\x18\x01 \x03(\tR\n" +
-	"messageIds\"\x91\x02\n" +
+	"messageIds\"\xac\x02\n" +
+	"\x0eContactMessage\x12C\n" +
+	"\x0fprofile_request\x18\x01 \x01(\v2\x18.protocol.ProfileRequestH\x00R\x0eprofileRequest\x12F\n" +
+	"\x10profile_response\x18\x02 \x01(\v2\x19.protocol.ProfileResponseH\x00R\x0fprofileResponse\x12C\n" +
+	"\x0fcontact_request\x18\x03 \x01(\v2\x18.protocol.ContactRequestH\x00R\x0econtactRequest\x12@\n" +
+	"\x0econtact_accept\x18\x04 \x01(\v2\x17.protocol.ContactAcceptH\x00R\rcontactAcceptB\x06\n" +
+	"\x04type\"\x91\x02\n" +
 	"\vProfileInfo\x12\x1a\n" +
 	"\bnickname\x18\x01 \x01(\tR\bnickname\x12$\n" +
 	"\rdiscriminator\x18\x02 \x01(\tR\rdiscriminator\x12!\n" +
@@ -698,84 +878,99 @@ const file_chat_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x10\n" +
 	"\x0eProfileRequest\"B\n" +
 	"\x0fProfileResponse\x12/\n" +
-	"\aprofile\x18\x01 \x01(\v2\x15.protocol.ProfileInfoR\aprofileB\x04Z\x02./b\x06proto3"
+	"\aprofile\x18\x01 \x01(\v2\x15.protocol.ProfileInfoR\aprofile\"N\n" +
+	"\x0eContactRequest\x12<\n" +
+	"\x0esender_profile\x18\x01 \x01(\v2\x15.protocol.ProfileInfoR\rsenderProfile\"M\n" +
+	"\rContactAccept\x12<\n" +
+	"\x0esender_profile\x18\x01 \x01(\v2\x15.protocol.ProfileInfoR\rsenderProfileB\x04Z\x02./b\x06proto3"
 
 var (
-	file_chat_proto_rawDescOnce sync.Once
-	file_chat_proto_rawDescData []byte
+	file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescOnce sync.Once
+	file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescData []byte
 )
 
-func file_chat_proto_rawDescGZIP() []byte {
-	file_chat_proto_rawDescOnce.Do(func() {
-		file_chat_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_chat_proto_rawDesc), len(file_chat_proto_rawDesc)))
+func file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescGZIP() []byte {
+	file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescOnce.Do(func() {
+		file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDesc), len(file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDesc)))
 	})
-	return file_chat_proto_rawDescData
+	return file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescData
 }
 
-var file_chat_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
-var file_chat_proto_goTypes = []any{
-	(Envelope_ChatType)(0),  // 0: protocol.Envelope.ChatType
-	(*Envelope)(nil),        // 1: protocol.Envelope
-	(*Content)(nil),         // 2: protocol.Content
-	(*TextMessage)(nil),     // 3: protocol.TextMessage
-	(*FileMetadata)(nil),    // 4: protocol.FileMetadata
-	(*ReadReceipts)(nil),    // 5: protocol.ReadReceipts
-	(*ProfileInfo)(nil),     // 6: protocol.ProfileInfo
-	(*ProfileRequest)(nil),  // 7: protocol.ProfileRequest
-	(*ProfileResponse)(nil), // 8: protocol.ProfileResponse
-	nil,                     // 9: protocol.ProfileInfo.MetadataEntry
+var file_cmd_fyne_gui_new_core_protocol_chat_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_cmd_fyne_gui_new_core_protocol_chat_proto_goTypes = []any{
+	(ChatMessage_ChatType)(0), // 0: protocol.ChatMessage.ChatType
+	(*Envelope)(nil),          // 1: protocol.Envelope
+	(*ChatMessage)(nil),       // 2: protocol.ChatMessage
+	(*TextMessage)(nil),       // 3: protocol.TextMessage
+	(*FileMetadata)(nil),      // 4: protocol.FileMetadata
+	(*ReadReceipts)(nil),      // 5: protocol.ReadReceipts
+	(*ContactMessage)(nil),    // 6: protocol.ContactMessage
+	(*ProfileInfo)(nil),       // 7: protocol.ProfileInfo
+	(*ProfileRequest)(nil),    // 8: protocol.ProfileRequest
+	(*ProfileResponse)(nil),   // 9: protocol.ProfileResponse
+	(*ContactRequest)(nil),    // 10: protocol.ContactRequest
+	(*ContactAccept)(nil),     // 11: protocol.ContactAccept
+	nil,                       // 12: protocol.ProfileInfo.MetadataEntry
 }
-var file_chat_proto_depIdxs = []int32{
-	0,  // 0: protocol.Envelope.chat_type:type_name -> protocol.Envelope.ChatType
-	2,  // 1: protocol.Envelope.content:type_name -> protocol.Content
-	5,  // 2: protocol.Envelope.read_receipts:type_name -> protocol.ReadReceipts
-	6,  // 3: protocol.Envelope.profile_info:type_name -> protocol.ProfileInfo
-	7,  // 4: protocol.Envelope.profile_request:type_name -> protocol.ProfileRequest
-	8,  // 5: protocol.Envelope.profile_response:type_name -> protocol.ProfileResponse
-	3,  // 6: protocol.Content.text:type_name -> protocol.TextMessage
-	4,  // 7: protocol.Content.file:type_name -> protocol.FileMetadata
-	9,  // 8: protocol.ProfileInfo.metadata:type_name -> protocol.ProfileInfo.MetadataEntry
-	6,  // 9: protocol.ProfileResponse.profile:type_name -> protocol.ProfileInfo
-	10, // [10:10] is the sub-list for method output_type
-	10, // [10:10] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+var file_cmd_fyne_gui_new_core_protocol_chat_proto_depIdxs = []int32{
+	2,  // 0: protocol.Envelope.chat_message:type_name -> protocol.ChatMessage
+	6,  // 1: protocol.Envelope.contact_message:type_name -> protocol.ContactMessage
+	0,  // 2: protocol.ChatMessage.chat_type:type_name -> protocol.ChatMessage.ChatType
+	3,  // 3: protocol.ChatMessage.text:type_name -> protocol.TextMessage
+	4,  // 4: protocol.ChatMessage.file:type_name -> protocol.FileMetadata
+	5,  // 5: protocol.ChatMessage.read_receipts:type_name -> protocol.ReadReceipts
+	8,  // 6: protocol.ContactMessage.profile_request:type_name -> protocol.ProfileRequest
+	9,  // 7: protocol.ContactMessage.profile_response:type_name -> protocol.ProfileResponse
+	10, // 8: protocol.ContactMessage.contact_request:type_name -> protocol.ContactRequest
+	11, // 9: protocol.ContactMessage.contact_accept:type_name -> protocol.ContactAccept
+	12, // 10: protocol.ProfileInfo.metadata:type_name -> protocol.ProfileInfo.MetadataEntry
+	7,  // 11: protocol.ProfileResponse.profile:type_name -> protocol.ProfileInfo
+	7,  // 12: protocol.ContactRequest.sender_profile:type_name -> protocol.ProfileInfo
+	7,  // 13: protocol.ContactAccept.sender_profile:type_name -> protocol.ProfileInfo
+	14, // [14:14] is the sub-list for method output_type
+	14, // [14:14] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
-func init() { file_chat_proto_init() }
-func file_chat_proto_init() {
-	if File_chat_proto != nil {
+func init() { file_cmd_fyne_gui_new_core_protocol_chat_proto_init() }
+func file_cmd_fyne_gui_new_core_protocol_chat_proto_init() {
+	if File_cmd_fyne_gui_new_core_protocol_chat_proto != nil {
 		return
 	}
-	file_chat_proto_msgTypes[0].OneofWrappers = []any{
-		(*Envelope_Content)(nil),
-		(*Envelope_ReadReceipts)(nil),
-		(*Envelope_ProfileInfo)(nil),
-		(*Envelope_ProfileRequest)(nil),
-		(*Envelope_ProfileResponse)(nil),
+	file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[0].OneofWrappers = []any{
+		(*Envelope_ChatMessage)(nil),
+		(*Envelope_ContactMessage)(nil),
 	}
-	file_chat_proto_msgTypes[1].OneofWrappers = []any{
-		(*Content_Text)(nil),
-		(*Content_File)(nil),
+	file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[1].OneofWrappers = []any{
+		(*ChatMessage_Text)(nil),
+		(*ChatMessage_File)(nil),
+		(*ChatMessage_ReadReceipts)(nil),
+	}
+	file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[5].OneofWrappers = []any{
+		(*ContactMessage_ProfileRequest)(nil),
+		(*ContactMessage_ProfileResponse)(nil),
+		(*ContactMessage_ContactRequest)(nil),
+		(*ContactMessage_ContactAccept)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_chat_proto_rawDesc), len(file_chat_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDesc), len(file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   9,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_chat_proto_goTypes,
-		DependencyIndexes: file_chat_proto_depIdxs,
-		EnumInfos:         file_chat_proto_enumTypes,
-		MessageInfos:      file_chat_proto_msgTypes,
+		GoTypes:           file_cmd_fyne_gui_new_core_protocol_chat_proto_goTypes,
+		DependencyIndexes: file_cmd_fyne_gui_new_core_protocol_chat_proto_depIdxs,
+		EnumInfos:         file_cmd_fyne_gui_new_core_protocol_chat_proto_enumTypes,
+		MessageInfos:      file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes,
 	}.Build()
-	File_chat_proto = out.File
-	file_chat_proto_goTypes = nil
-	file_chat_proto_depIdxs = nil
+	File_cmd_fyne_gui_new_core_protocol_chat_proto = out.File
+	file_cmd_fyne_gui_new_core_protocol_chat_proto_goTypes = nil
+	file_cmd_fyne_gui_new_core_protocol_chat_proto_depIdxs = nil
 }
