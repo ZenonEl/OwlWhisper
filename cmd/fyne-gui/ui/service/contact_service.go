@@ -23,6 +23,7 @@ const (
 	StatusOnline
 	StatusConnecting
 	StatusUnknown
+	StatusAwaitingApproval
 )
 
 // Contact представляет собой контакт в адресной книге.
@@ -116,38 +117,174 @@ func (cs *ContactService) HandleProfileResponse(senderID string, res *protocol.P
 	if res.Profile == nil {
 		return
 	}
+	// ВАЖНО: Мы больше не вызываем cs.provider.AddContact(contact) здесь.
+	// Вместо этого мы должны передать этот профиль в UI, чтобы он показал диалог.
+	// Мы можем сделать это через новый callback.
 
-	contact := &Contact{
-		PeerID:        senderID,
-		Nickname:      res.Profile.Nickname,
-		Discriminator: res.Profile.Discriminator,
-		Status:        StatusOnline,
-	}
-
-	cs.Provider.AddContact(contact)
-	log.Printf("INFO: [ContactService] Профиль для %s обновлен: %s", senderID[:8], contact.FullAddress())
-	cs.onUpdate() // Уведомляем UI, что список контактов изменился
+	// TODO: Добавить новый callback onProfileReceived.
+	// Временное решение для простоты: будем вызывать метод UI напрямую (не идеально, но для теста сойдет).
+	// В реальном коде здесь должен быть callback.
 }
 
-// RespondToProfileRequest отправляет наш профиль в ответ на "пинг".
-func (cs *ContactService) RespondToProfileRequest(recipientID string) {
-	// Создаем Protobuf-ответ с нашим профилем
-	res := &protocol.ProfileResponse{
-		Profile: &protocol.ProfileInfo{
-			Nickname:      cs.myProfile.Nickname,
-			Discriminator: cs.myProfile.Discriminator,
+// HandleContactRequest обрабатывает входящий запрос на добавление в контакты.
+func (cs *ContactService) HandleContactRequest(senderID string, req *protocol.ContactRequest) {
+	if req.SenderProfile == nil {
+		return
+	}
+	// TODO: Показать в UI уведомление:
+	// "Пользователь X#123 хочет добавить вас. [Принять] [Отклонить]"
+	// Пока что для теста будем принимать автоматически.
+	log.Printf("INFO: [ContactService] Получен ContactRequest от %s. Автоматически принимаем.", senderID[:8])
+
+	// 1. Добавляем контакт в нашу БД
+	profile := req.SenderProfile
+	contact := &Contact{
+		PeerID:        senderID,
+		Nickname:      profile.Nickname,
+		Discriminator: profile.Discriminator,
+		Status:        StatusOnline, // Он точно онлайн, раз прислал запрос
+	}
+	cs.Provider.AddContact(contact)
+	cs.onUpdate()
+
+	// 2. Отправляем в ответ подтверждение
+	cs.SendContactAccept(senderID, cs.myProfile)
+}
+
+// HandleContactAccept обрабатывает подтверждение дружбы.
+func (cs *ContactService) HandleContactAccept(senderID string, acc *protocol.ContactAccept) {
+	if acc.SenderProfile == nil {
+		return
+	}
+	log.Printf("INFO: [ContactService] Получен ContactAccept от %s. Дружба подтверждена!", senderID[:8])
+
+	// Обновляем статус контакта в нашей БД с "ожидает" на "подтвержден"
+	profile := acc.SenderProfile
+	contact := &Contact{
+		PeerID:        senderID,
+		Nickname:      profile.Nickname,
+		Discriminator: profile.Discriminator,
+		Status:        StatusOnline,
+	}
+	cs.Provider.AddContact(contact) // Метод AddContact должен уметь обновлять существующие
+	cs.onUpdate()
+}
+
+// SendContactAccept отправляет подтверждение дружбы.
+func (cs *ContactService) SendContactAccept(recipientID string, myProfile *Contact) {
+	// Логика очень похожа на SendContactRequest
+	acc := &protocol.ContactAccept{
+		SenderProfile: &protocol.ProfileInfo{
+			Nickname:      myProfile.Nickname,
+			Discriminator: myProfile.Discriminator,
+		},
+	}
+	contactMsg := &protocol.ContactMessage{
+		Type: &protocol.ContactMessage_ContactAccept{ContactAccept: acc},
+	}
+	envelope := &protocol.Envelope{
+		// ... заполняем поля ...
+		Payload: &protocol.Envelope_ContactMessage{ContactMessage: contactMsg},
+	}
+
+	data, err := proto.Marshal(envelope)
+	if err != nil {
+		return
+	}
+
+	log.Printf("INFO: [ContactService] Отправка ContactAccept пиру %s", recipientID[:8])
+	cs.core.SendDataToPeer(recipientID, data)
+}
+
+// UpdateContactStatus обновляет онлайн-статус контакта.
+func (cs *ContactService) UpdateContactStatus(peerID string, status ContactStatus) {
+	// Ищем контакт в нашем хранилище
+	contact, ok := cs.Provider.GetContactByPeerID(peerID)
+	if !ok {
+		// Если это не наш контакт, нам нет дела до его статуса. Просто выходим.
+		return
+	}
+
+	// Обновляем статус и сохраняем обратно в хранилище
+	contact.Status = status
+	cs.Provider.AddContact(contact) // В нашей in-memory реализации это работает как "update"
+
+	log.Printf("INFO: [ContactService] Статус для %s обновлен.", contact.FullAddress())
+
+	// Уведомляем UI, что нужно перерисовать список контактов
+	cs.onUpdate()
+}
+
+// SendContactRequest (Фаза 3)
+func (cs *ContactService) SendContactRequest(recipientID string, myProfile *Contact) {
+	// Создаем Protobuf-запрос с нашим профилем
+	req := &protocol.ContactRequest{
+		SenderProfile: &protocol.ProfileInfo{
+			Nickname:      myProfile.Nickname,
+			Discriminator: myProfile.Discriminator,
 		},
 	}
 
-	payload := &protocol.Envelope_ProfileResponse{ProfileResponse: res}
+	contactMsg := &protocol.ContactMessage{
+		Type: &protocol.ContactMessage_ContactRequest{ContactRequest: req},
+	}
 
 	envelope := &protocol.Envelope{
 		MessageId:     uuid.New().String(),
 		SenderId:      cs.myProfile.PeerID,
 		TimestampUnix: time.Now().Unix(),
-		ChatType:      protocol.Envelope_PRIVATE,
-		ChatId:        recipientID,
-		Payload:       payload,
+		Payload:       &protocol.Envelope_ContactMessage{ContactMessage: contactMsg},
+	}
+
+	data, err := proto.Marshal(envelope)
+	if err != nil {
+		log.Printf("ERROR: [ContactService] Ошибка Marshal при создании ContactRequest: %v", err)
+		return
+	}
+
+	// Добавляем контакт в нашу БД со статусом "ожидает"
+	pendingContact := &Contact{
+		PeerID: recipientID,
+		// Мы пока не знаем его ник, поэтому используем временные данные
+		Nickname:      "Pending...",
+		Discriminator: recipientID[len(recipientID)-6:],
+		// ИСПРАВЛЕНО: Убираем префикс `services.`
+		Status: StatusAwaitingApproval,
+	}
+	// ИСПРАВЛЕНО: Используем публичное поле `Provider`
+	cs.Provider.AddContact(pendingContact)
+	cs.onUpdate() // Обновляем UI, чтобы показать "pending" контакт
+
+	log.Printf("INFO: [ContactService] Отправка ContactRequest пиру %s", recipientID[:8])
+	if err := cs.core.SendDataToPeer(recipientID, data); err != nil {
+		log.Printf("ERROR: [ContactService] Не удалось отправить ContactRequest: %v", err)
+	}
+}
+
+// RespondToProfileRequest отправляет наш профиль в ответ на "пинг".
+func (cs *ContactService) RespondToProfileRequest(recipientID string) {
+	// 1. Создаем самый внутренний payload - наш профиль
+	profileRes := &protocol.ProfileResponse{
+		Profile: &protocol.ProfileInfo{
+			Nickname:      cs.myProfile.Nickname,
+			Discriminator: cs.myProfile.Discriminator,
+			// TODO: Добавить другие поля профиля, когда они появятся
+		},
+	}
+
+	// 2. Оборачиваем его в ContactMessage
+	contactMsg := &protocol.ContactMessage{
+		Type: &protocol.ContactMessage_ProfileResponse{ProfileResponse: profileRes},
+	}
+
+	// 3. Оборачиваем ContactMessage в главный Envelope
+	envelope := &protocol.Envelope{
+		MessageId:     uuid.New().String(),
+		SenderId:      cs.myProfile.PeerID,
+		TimestampUnix: time.Now().Unix(),
+		// ВАЖНО: Поля ChatType и ChatId здесь больше не нужны,
+		// так как мы отправляем ContactMessage, а не ChatMessage.
+		Payload: &protocol.Envelope_ContactMessage{ContactMessage: contactMsg},
 	}
 
 	data, err := proto.Marshal(envelope)
@@ -156,7 +293,10 @@ func (cs *ContactService) RespondToProfileRequest(recipientID string) {
 		return
 	}
 
-	cs.core.SendDataToPeer(recipientID, data)
+	log.Printf("INFO: [ContactService] Отправка ProfileResponse пиру %s", recipientID[:8])
+	if err := cs.core.SendDataToPeer(recipientID, data); err != nil {
+		log.Printf("ERROR: [ContactService] Не удалось отправить ProfileResponse: %v", err)
+	}
 }
 
 func (cs *ContactService) UpdateMyProfile(peerID string) {

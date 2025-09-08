@@ -14,6 +14,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	newcore "OwlWhisper/cmd/fyne-gui/new-core"
+	protocol "OwlWhisper/cmd/fyne-gui/new-core/protocol"
 	services "OwlWhisper/cmd/fyne-gui/ui/service"
 )
 
@@ -69,7 +70,7 @@ func NewAppUI(core newcore.ICoreController) *AppUI {
 	})
 
 	// 3. Создаем Диспетчер... (без изменений)
-	ui.dispatcher = services.NewMessageDispatcher(ui.contactService, ui.chatService)
+	ui.dispatcher = services.NewMessageDispatcher(ui.contactService, ui.chatService, ui)
 
 	win.SetContent(ui.buildUI()) // buildUI теперь не принимает аргументов
 	win.Resize(fyne.NewSize(800, 600))
@@ -172,11 +173,27 @@ func (ui *AppUI) eventLoop() {
 				ui.dispatcher.HandleIncomingData(payload.SenderID, payload.Data)
 			}
 
+		case "PeerConnected":
+			if payload, ok := event.Payload.(newcore.PeerStatusPayload); ok {
+				ui.statusLabelText.Set(fmt.Sprintf("Статус: Подключен пир %s", payload.PeerID[:8]))
+				ui.contactService.UpdateContactStatus(payload.PeerID, services.StatusOnline)
+			}
+
+		case "PeerDisconnected":
+			if payload, ok := event.Payload.(newcore.PeerStatusPayload); ok {
+				ui.statusLabelText.Set(fmt.Sprintf("Статус: Отключен пир %s", payload.PeerID[:8]))
+				ui.contactService.UpdateContactStatus(payload.PeerID, services.StatusOffline)
+			}
 			// case "PeerConnected", "PeerDisconnected":
 			// 	// Обновляем статусы контактов и затем UI
 			// 	ui.contactService.UpdateContactStatuses(ui.coreController.GetConnectedPeers())
 		}
 	}
+}
+
+func (ui *AppUI) OnProfileReceived(senderID string, profile *protocol.ProfileInfo) {
+	// Мы получили профиль, теперь показываем диалог подтверждения
+	ui.ShowConfirmContactDialog(profile, senderID)
 }
 
 // refreshContacts безопасно обновляет список контактов в UI.
