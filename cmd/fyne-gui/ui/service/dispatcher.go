@@ -14,7 +14,6 @@ import (
 type MessageDispatcher struct {
 	contactService *ContactService
 	chatService    *ChatService
-	ui             AppUIProvider
 }
 
 type AppUIProvider interface {
@@ -22,11 +21,10 @@ type AppUIProvider interface {
 	// В будущем здесь будут другие методы, например, OnContactRequestReceived
 }
 
-func NewMessageDispatcher(cs *ContactService, chs *ChatService, ui AppUIProvider) *MessageDispatcher {
+func NewMessageDispatcher(cs *ContactService, chs *ChatService) *MessageDispatcher {
 	return &MessageDispatcher{
 		contactService: cs,
 		chatService:    chs,
-		ui:             ui,
 	}
 }
 
@@ -78,12 +76,10 @@ func (d *MessageDispatcher) handleContactMessage(senderID string, msg *protocol.
 		d.contactService.RespondToProfileRequest(senderID)
 
 	case *protocol.ContactMessage_ProfileResponse:
-		// Нам прислали ответ с профилем.
 		log.Printf("INFO: [Dispatcher] Получен ProfileResponse от %s", senderID)
-		d.ui.OnProfileReceived(senderID, typ.ProfileResponse.GetProfile())
+		d.contactService.HandleProfileResponse(senderID, typ.ProfileResponse)
 
 	case *protocol.ContactMessage_ContactRequest:
-		// НОВОЕ: Обрабатываем запрос на добавление в контакты
 		d.contactService.HandleContactRequest(senderID, typ.ContactRequest)
 
 	case *protocol.ContactMessage_ContactAccept:
