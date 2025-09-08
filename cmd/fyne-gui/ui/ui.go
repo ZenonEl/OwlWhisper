@@ -56,23 +56,11 @@ func NewAppUI(core newcore.ICoreController) *AppUI {
 	ui.peerIDLabelText.Set("PeerID: загрузка...")
 	ui.statusLabelText.Set("Статус: инициализация...")
 
-	// --- ИНИЦИАЛИЗАЦИЯ СЕРВИСОВ ---
-	// 1. Создаем ContactService
-	ui.contactService = services.NewContactService(core, func() {
-		ui.refreshContacts()
-	})
+	ui.contactService = services.NewContactService(core, ui.refreshContacts, ui)
 
-	// 2. Создаем ChatService
-	// ИСПРАВЛЕНО: Передаем не ui.contactService, а ui.contactService.Provider
-	// который как раз и реализует интерфейс ContactProvider.
-	ui.chatService = services.NewChatService(core, ui.contactService.Provider, func(formattedMessage string) {
-		ui.messages.Append(formattedMessage)
-	})
+	ui.dispatcher = services.NewMessageDispatcher(ui.contactService, ui.chatService)
 
-	// 3. Создаем Диспетчер... (без изменений)
-	ui.dispatcher = services.NewMessageDispatcher(ui.contactService, ui.chatService, ui)
-
-	win.SetContent(ui.buildUI()) // buildUI теперь не принимает аргументов
+	win.SetContent(ui.buildUI())
 	win.Resize(fyne.NewSize(800, 600))
 	return ui
 }
@@ -192,8 +180,11 @@ func (ui *AppUI) eventLoop() {
 }
 
 func (ui *AppUI) OnProfileReceived(senderID string, profile *protocol.ProfileInfo) {
-	// Мы получили профиль, теперь показываем диалог подтверждения
 	ui.ShowConfirmContactDialog(profile, senderID)
+}
+
+func (ui *AppUI) OnContactRequestReceived(senderID string, profile *protocol.ProfileInfo) {
+	ui.ShowContactRequestDialog(senderID, profile)
 }
 
 // refreshContacts безопасно обновляет список контактов в UI.

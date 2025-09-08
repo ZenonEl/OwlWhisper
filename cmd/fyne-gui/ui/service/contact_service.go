@@ -77,15 +77,21 @@ func (p *InMemoryContactProvider) AddContact(contact *Contact) {
 	p.contacts[contact.PeerID] = contact
 }
 
+type ContactUIManager interface {
+	OnProfileReceived(senderID string, profile *protocol.ProfileInfo)
+	OnContactRequestReceived(senderID string, profile *protocol.ProfileInfo) // <-- НОВЫЙ МЕТОД
+}
+
 // ContactService управляет всей бизнес-логикой, связанной с контактами.
 type ContactService struct {
 	core      newcore.ICoreController
 	Provider  ContactProvider
 	onUpdate  func()   // Callback для обновления UI
 	myProfile *Contact // Профиль текущего пользователя
+	uiManager ContactUIManager
 }
 
-func NewContactService(core newcore.ICoreController, onUpdate func()) *ContactService {
+func NewContactService(core newcore.ICoreController, onUpdate func(), uiManager ContactUIManager) *ContactService {
 	// Создаем наш профиль на основе данных из Core
 	myProfile := &Contact{
 		PeerID:        "загрузка...",
@@ -99,6 +105,7 @@ func NewContactService(core newcore.ICoreController, onUpdate func()) *ContactSe
 		Provider:  NewInMemoryContactProvider(),
 		onUpdate:  onUpdate,
 		myProfile: myProfile,
+		uiManager: uiManager,
 	}
 
 	// Начинаем анонсировать свой профиль в DHT
@@ -117,13 +124,10 @@ func (cs *ContactService) HandleProfileResponse(senderID string, res *protocol.P
 	if res.Profile == nil {
 		return
 	}
-	// ВАЖНО: Мы больше не вызываем cs.provider.AddContact(contact) здесь.
-	// Вместо этого мы должны передать этот профиль в UI, чтобы он показал диалог.
-	// Мы можем сделать это через новый callback.
+	log.Printf("INFO: [ContactService] Получен профиль от %s. Передаем в UI для подтверждения.", senderID[:8])
 
-	// TODO: Добавить новый callback onProfileReceived.
-	// Временное решение для простоты: будем вызывать метод UI напрямую (не идеально, но для теста сойдет).
-	// В реальном коде здесь должен быть callback.
+	// Вызываем метод интерфейса, реализованный в UI, чтобы показать диалог.
+	cs.uiManager.OnProfileReceived(senderID, res.Profile)
 }
 
 // HandleContactRequest обрабатывает входящий запрос на добавление в контакты.
@@ -131,24 +135,28 @@ func (cs *ContactService) HandleContactRequest(senderID string, req *protocol.Co
 	if req.SenderProfile == nil {
 		return
 	}
-	// TODO: Показать в UI уведомление:
-	// "Пользователь X#123 хочет добавить вас. [Принять] [Отклонить]"
-	// Пока что для теста будем принимать автоматически.
-	log.Printf("INFO: [ContactService] Получен ContactRequest от %s. Автоматически принимаем.", senderID[:8])
+	log.Printf("INFO: [ContactService] Получен ContactRequest от %s. Передаем в UI для подтверждения.", senderID[:8])
+
+	// ИСПОЛЬЗУЕМ ИНТЕРФЕЙС, чтобы уведомить UI
+	cs.uiManager.OnContactRequestReceived(senderID, req.SenderProfile)
+}
+
+// НОВЫЙ МЕТОД: AcceptContactRequest - вызывается из UI, когда пользователь нажимает "Принять".
+func (cs *ContactService) AcceptContactRequest(peerID string, profile *protocol.ProfileInfo) {
+	log.Printf("INFO: [ContactService] Запрос от %s принят. Добавляем контакт и отправляем подтверждение.", peerID[:8])
 
 	// 1. Добавляем контакт в нашу БД
-	profile := req.SenderProfile
 	contact := &Contact{
-		PeerID:        senderID,
+		PeerID:        peerID,
 		Nickname:      profile.Nickname,
 		Discriminator: profile.Discriminator,
-		Status:        StatusOnline, // Он точно онлайн, раз прислал запрос
+		Status:        StatusOnline,
 	}
 	cs.Provider.AddContact(contact)
 	cs.onUpdate()
 
 	// 2. Отправляем в ответ подтверждение
-	cs.SendContactAccept(senderID, cs.myProfile)
+	cs.SendContactAccept(peerID, cs.myProfile)
 }
 
 // HandleContactAccept обрабатывает подтверждение дружбы.
@@ -293,7 +301,7 @@ func (cs *ContactService) RespondToProfileRequest(recipientID string) {
 		return
 	}
 
-	log.Printf("INFO: [ContactService] Отправка ProfileResponse пиру %s", recipientID[:8])
+	log.Printf("INFO: [ContactService] Отправка ProfileResponse пиру %s", recipientID)
 	if err := cs.core.SendDataToPeer(recipientID, data); err != nil {
 		log.Printf("ERROR: [ContactService] Не удалось отправить ProfileResponse: %v", err)
 	}
