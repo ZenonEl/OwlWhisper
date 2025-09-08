@@ -42,26 +42,33 @@ func NewAppUI(core newcore.ICoreController) *AppUI {
 	a := app.New()
 	win := a.NewWindow("Owl Whisper - Fyne GUI Test")
 
+	// 1. Сначала создаем пустую структуру AppUI
 	ui := &AppUI{
-		coreController: core,
-		app:            a,
-		mainWindow:     win,
-
-		// Инициализируем связанные данные
-		peerIDLabelText: binding.NewString(),
-		statusLabelText: binding.NewString(),
+		coreController:  core,
+		app:             a,
+		mainWindow:      win,
 		messages:        binding.NewStringList(),
 		contacts:        binding.NewUntypedList(),
+		peerIDLabelText: binding.NewString(),
+		statusLabelText: binding.NewString(),
 	}
 	ui.peerIDLabelText.Set("PeerID: загрузка...")
 	ui.statusLabelText.Set("Статус: инициализация...")
 
-	ui.contactService = services.NewContactService(core, ui.refreshContacts, ui)
+	// --- ИСПРАВЛЕННЫЙ ПОРЯДОК ---
 
+	// 2. ТЕПЕРЬ создаем все сервисы. `ui` уже существует.
+	ui.contactService = services.NewContactService(core, ui.refreshContacts, ui)
+	ui.chatService = services.NewChatService(core, ui.contactService.Provider, func(formattedMessage string) {
+		ui.messages.Append(formattedMessage)
+	})
 	ui.dispatcher = services.NewMessageDispatcher(ui.contactService, ui.chatService)
 
+	// 3. И ТОЛЬКО ТЕПЕРЬ, когда все сервисы готовы, мы создаем UI,
+	// который будет их использовать.
 	win.SetContent(ui.buildUI())
 	win.Resize(fyne.NewSize(800, 600))
+
 	return ui
 }
 
@@ -77,19 +84,18 @@ func (ui *AppUI) Start() {
 }
 
 func (ui *AppUI) buildUI() fyne.CanvasObject {
-	// ИСПОЛЬЗУЕМ WIDGET.NEW...WITHDATA для привязки
 	ui.peerIDLabel = widget.NewLabelWithData(ui.peerIDLabelText)
 	ui.statusLabel = widget.NewLabelWithData(ui.statusLabelText)
 	ui.peerIDLabel.Selectable = true
 
 	contactsList := widget.NewListWithData(
-		ui.contacts, // <-- Привязываем к списку контактов
+		ui.contacts,
 		func() fyne.CanvasObject {
 			return container.NewHBox(widget.NewIcon(theme.RadioButtonIcon()), widget.NewLabel("template"))
 		},
 		func(item binding.DataItem, o fyne.CanvasObject) {
 			untyped, _ := item.(binding.Untyped).Get()
-			contact := untyped.(*services.Contact) // <-- Извлекаем наш объект
+			contact := untyped.(*services.Contact)
 
 			hbox := o.(*fyne.Container)
 			icon := hbox.Objects[0].(*widget.Icon)
@@ -108,7 +114,11 @@ func (ui *AppUI) buildUI() fyne.CanvasObject {
 		item, _ := ui.contacts.GetValue(id)
 		contact := item.(*services.Contact)
 		ui.currentChatPeerID = contact.PeerID
-		ui.messages.Set([]string{}) // Очищаем чат
+
+		// TODO: Загрузка истории чата из БД
+		ui.messages.Set([]string{}) // Пока что просто очищаем чат
+
+		ui.statusLabelText.Set(fmt.Sprintf("Открыт чат с %s", contact.Nickname))
 		log.Printf("INFO: Выбран чат с %s", contact.FullAddress())
 		contactsList.UnselectAll()
 	}
@@ -126,20 +136,32 @@ func (ui *AppUI) buildUI() fyne.CanvasObject {
 	)
 
 	messageEntry := widget.NewEntry()
-	messageEntry.SetPlaceHolder("Выберите контакт...")
+	messageEntry.SetPlaceHolder("Выберите контакт для начала общения...")
 
 	sendButton := widget.NewButton("Отправить", func() {
 		text := messageEntry.Text
-		if text != "" && ui.currentChatPeerID != "" {
-			ui.coreController.SendDataToPeer(ui.currentChatPeerID, []byte(text))
-			myProfile := ui.contactService.GetMyProfile()
-			ui.messages.Append(fmt.Sprintf("[%s]: %s", myProfile.Nickname, text))
-			messageEntry.SetText("")
+		if text == "" || ui.currentChatPeerID == "" {
+			return // Нечего отправлять или некому
 		}
+
+		// --- ИЗМЕНЕНО: Используем ChatService для отправки ---
+		err := ui.chatService.SendTextMessage(ui.currentChatPeerID, text)
+		if err != nil {
+			log.Printf("ERROR: [UI] Не удалось отправить сообщение: %v", err)
+			ui.statusLabelText.Set(fmt.Sprintf("Ошибка отправки: %v", err))
+			return
+		}
+
+		// Оптимистичное обновление UI: добавляем свое сообщение сразу
+		myProfile := ui.contactService.GetMyProfile()
+		ui.messages.Append(fmt.Sprintf("[%s]: %s", myProfile.Nickname, text))
+
+		messageEntry.SetText("")
 	})
 
 	bottomPanel := container.NewBorder(nil, nil, nil, sendButton, messageEntry)
 	rightPanel := container.NewBorder(nil, bottomPanel, nil, nil, chatMessages)
+
 	split := container.NewHSplit(leftPanel, rightPanel)
 	split.Offset = 0.3
 	return container.NewBorder(container.NewVBox(ui.peerIDLabel, ui.statusLabel, widget.NewSeparator()), nil, nil, nil, split)
