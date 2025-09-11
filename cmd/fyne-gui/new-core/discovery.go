@@ -111,7 +111,7 @@ func (dm *DiscoveryManager) startXxxDHT() {
 				return
 			}
 			if err := dm.host.Connect(dm.ctx, *peerInfo); err != nil {
-				// Warn("[DHT] Не удалось подключиться к bootstrap-пиру %s: %v", peerInfo.ID.ShortString(), err)
+				Warn("[DHT] Не удалось подключиться к bootstrap-пиру %s: %v", peerInfo.ID.ShortString(), err)
 			} else {
 				Info("[DHT] Установлено соединение с bootstrap-пиром: %s", peerInfo.ID.ShortString())
 			}
