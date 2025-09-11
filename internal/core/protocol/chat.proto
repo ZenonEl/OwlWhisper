@@ -1,0 +1,107 @@
+syntax = "proto3";
+
+package protocol;
+
+// Укажите здесь ваш правильный путь к Go-модулю. Например:
+// option go_package = "github.com/zentfany/owlwhisper-core/internal/protocol";
+option go_package = "./";
+
+// ---------------------------------------------------------------- //
+// ----------------- ОСНОВНОЙ "КОНВЕРТ" ----------------- //
+// ---------------------------------------------------------------- //
+
+// Envelope - это "конверт", в который заворачивается каждое
+// сообщение, передаваемое по сети.
+message Envelope {
+    string message_id = 1;      // Уникальный ID конверта (UUID)
+    string sender_id = 2;       // PeerID отправителя
+    int64 timestamp_unix = 3;   // Время отправки
+    
+    // Содержимое сообщения. oneof гарантирует, что внутри будет
+    // что-то одно. Мы разделили сообщения на две категории:
+    // для чатов (прямых и групповых) и для управления контактами.
+    oneof payload {
+        ChatMessage chat_message = 4;      // Сообщение, относящееся к чату
+        ContactMessage contact_message = 5; // Сообщение для управления контактами
+    }
+}
+
+// ---------------------------------------------------------------- //
+// ----------------- СООБЩЕНИЯ ДЛЯ ЧАТОВ ----------------- //
+// ---------------------------------------------------------------- //
+
+message ChatMessage {
+    enum ChatType {
+        PRIVATE = 0; // Личное сообщение (1-на-1)
+        GROUP = 1;   // Групповой чат
+    }
+    ChatType chat_type = 1;
+    
+    string chat_id = 2; // ID чата (для групп - ID группы, для личных - PeerID собеседника)
+    
+    oneof content {
+        TextMessage text = 3;           // Текстовое сообщение
+        FileMetadata file = 4;          // Метаданные файла
+        ReadReceipts read_receipts = 5; // Уведомления о прочтении
+    }
+}
+
+message TextMessage {
+    string body = 1;
+    string reply_to_message_id = 2; // ID сообщения, на которое отвечаем
+}
+
+message FileMetadata {
+    string filename = 1;
+    int64 size_bytes = 2;
+    string mime_type = 3;
+    string hash_sha256 = 4;
+}
+
+message ReadReceipts {
+    repeated string message_ids = 1; // ID прочитанных сообщений
+}
+
+// ---------------------------------------------------------------- //
+// ----------------- СООБЩЕНИЯ ДЛЯ УПРАВЛЕНИЯ КОНТАКТАМИ ----------------- //
+// ---------------------------------------------------------------- //
+
+// ContactMessage - это обертка для всех сообщений, связанных
+// с добавлением, верификацией и управлением контактами.
+message ContactMessage {
+    oneof type {
+        ProfileRequest  profile_request = 1;  // "Пинг" - запрос профиля
+        ProfileResponse profile_response = 2; // "Понг" - ответ с профилем
+        ContactRequest  contact_request = 3;  // Запрос на добавление в контакты
+        ContactAccept   contact_accept = 4;   // Подтверждение добавления
+    }
+}
+
+// ProfileInfo - публичная часть профиля пользователя.
+message ProfileInfo {
+    string nickname = 1;
+    string discriminator = 2;
+    string display_name = 3;
+    string avatar_hash = 4;
+    map<string, string> metadata = 5; // Доп. информация (версия клиента и т.д.)
+}
+
+// "Пинг": запрос на получение профиля.
+message ProfileRequest {}
+
+// "Понг": ответ с профилем.
+message ProfileResponse {
+    ProfileInfo profile = 1;
+}
+
+// НОВОЕ: Запрос на добавление в контакты.
+// Содержит профиль отправителя, чтобы получатель знал, кого добавляет.
+message ContactRequest {
+    ProfileInfo sender_profile = 1;
+}
+
+// НОВОЕ: Подтверждение запроса на добавление.
+// Также содержит профиль для финальной синхронизации.
+message ContactAccept {
+    ProfileInfo sender_profile = 1;
+}

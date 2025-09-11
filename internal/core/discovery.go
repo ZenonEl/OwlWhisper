@@ -1,8 +1,10 @@
-package core
+// cmd/fyne-gui/new-core/discovery.go
+
+package newcore
 
 import (
 	"context"
-	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -11,469 +13,166 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/discovery/mdns"
 	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
+	dutil "github.com/libp2p/go-libp2p/p2p/discovery/util"
+	"github.com/multiformats/go-multiaddr"
 )
 
-const (
-	DISCOVERY_TAG     = "owl-whisper-mdns"
-	GLOBAL_RENDEZVOUS = "owl-whisper-global"
-)
-
-// DiscoveryNotifee обрабатывает события обнаружения
-type DiscoveryNotifee struct {
-	node   host.Host
-	ctx    context.Context
-	onPeer func(peer.AddrInfo)
+// mdnsNotifee реализует интерфейс для получения уведомлений от сервиса mDNS.
+type mdnsNotifee struct {
+	host        host.Host
+	onPeerFound func(peer.AddrInfo)
 }
 
-// HandlePeerFound вызывается когда найден новый пир
-func (n *DiscoveryNotifee) HandlePeerFound(pi peer.AddrInfo) {
-	// Пропускаем себя
-	if pi.ID == n.node.ID() {
-		return
-	}
-
-	Info("📢 Обнаружен новый пир: %s", pi.ID.ShortString())
-
-	// Пытаемся подключиться
-	if err := n.node.Connect(n.ctx, pi); err != nil {
-		Error("❌ Не удалось подключиться к %s: %v", pi.ID.ShortString(), err)
-		return
-	}
-
-	Info("✅ Успешное подключение к %s", pi.ID.ShortString())
-
-	// Уведомляем о новом пире
-	if n.onPeer != nil {
-		n.onPeer(pi)
-	}
+// HandlePeerFound вызывается, когда mDNS находит нового участника в локальной сети.
+func (n *mdnsNotifee) HandlePeerFound(pi peer.AddrInfo) {
+	log.Printf("INFO: [mDNS] Обнаружен пир: %s", pi.ID.ShortString())
+	n.onPeerFound(pi)
 }
 
-// DiscoveryManager управляет обнаружением пиров
+// DiscoveryManager управляет всеми механизмами обнаружения (mDNS, DHT).
 type DiscoveryManager struct {
-	host             host.Host
-	dht              *dht.IpfsDHT
-	routingDiscovery *routing.RoutingDiscovery
-	mdnsService      mdns.Service
-	notifee          *DiscoveryNotifee
-
-	ctx    context.Context
-	cancel context.CancelFunc
-
-	// Канал для уведомлений о новых пирах
-	peersChan chan peer.AddrInfo
-
-	// EventManager для отправки событий статуса сети
-	eventManager *EventManager
+	host        host.Host
+	cfg         Config
+	ctx         context.Context
+	dht         *dht.IpfsDHT
+	onPeerFound func(peer.AddrInfo)
 }
 
-// NewDiscoveryManager создает новый менеджер обнаружения
-func NewDiscoveryManager(ctx context.Context, host host.Host, onPeer func(peer.AddrInfo), eventManager *EventManager) (*DiscoveryManager, error) {
-	ctx, cancel := context.WithCancel(ctx)
-
-	notifee := &DiscoveryNotifee{
-		node:   host,
-		ctx:    ctx,
-		onPeer: onPeer,
-	}
-
-	// Создаем mDNS сервис
-	mdnsService := mdns.NewMdnsService(host, DISCOVERY_TAG, notifee)
-
-	// Создаем DHT в режиме сервера
-	kadDHT, err := dht.New(ctx, host, dht.Mode(dht.ModeServer))
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("не удалось создать DHT: %w", err)
-	}
-
-	// Создаем routing discovery
-	routingDiscovery := routing.NewRoutingDiscovery(kadDHT)
-
+// NewDiscoveryManager создает и настраивает новый менеджер обнаружения.
+func NewDiscoveryManager(ctx context.Context, h host.Host, cfg Config, onPeerFound func(peer.AddrInfo)) (*DiscoveryManager, error) {
 	dm := &DiscoveryManager{
-		host:             host,
-		dht:              kadDHT,
-		routingDiscovery: routingDiscovery,
-		mdnsService:      mdnsService,
-		notifee:          notifee,
-		ctx:              ctx,
-		cancel:           cancel,
-		peersChan:        make(chan peer.AddrInfo, 100),
-		eventManager:     eventManager,
+		host:        h,
+		cfg:         cfg,
+		ctx:         ctx,
+		onPeerFound: onPeerFound,
 	}
-
+	if cfg.EnableDHT {
+		kadDHT, err := dht.New(ctx, h, dht.Mode(dht.ModeServer))
+		if err != nil {
+			return nil, err
+		}
+		dm.dht = kadDHT
+	}
 	return dm, nil
 }
 
-// Start запускает discovery сервисы
-func (dm *DiscoveryManager) Start() error {
-	// Запускаем mDNS
-	if err := dm.mdnsService.Start(); err != nil {
-		return fmt.Errorf("не удалось запустить mDNS: %w", err)
-	}
-	Info("📡 mDNS сервис запущен")
-
-	// Подключаемся к bootstrap узлам
-	if err := dm.dht.Bootstrap(dm.ctx); err != nil {
-		Warn("⚠️ Не удалось подключиться к bootstrap узлам: %v", err)
-	} else {
-		Info("✅ Bootstrap завершен")
+// Start запускает все включенные в конфигурации сервисы обнаружения в фоновом режиме.
+func (dm *DiscoveryManager) Start() {
+	if dm.cfg.EnableMDNS {
+		go dm.startXxxMDNS()
 	}
 
-	// Запускаем mDNS discovery в фоне
-	go dm.startMDNSDiscovery()
-
-	// Запускаем DHT discovery в фоне
-	go dm.startDHTDiscovery()
-
-	return nil
+	if dm.cfg.EnableDHT {
+		go dm.startXxxDHT()
+	}
 }
 
-// Stop останавливает discovery сервисы
-func (dm *DiscoveryManager) Stop() error {
-	dm.cancel()
-
-	if dm.mdnsService != nil {
-		dm.mdnsService.Close()
-	}
-
-	if dm.dht != nil {
-		return dm.dht.Close()
-	}
-
-	return nil
-}
-
-// GetDHT возвращает DHT для использования в других частях системы
-func (dm *DiscoveryManager) GetDHT() *dht.IpfsDHT {
+// DHT возвращает экземпляр KadDHT для выполнения прямых запросов (Provide/FindProviders).
+func (dm *DiscoveryManager) DHT() *dht.IpfsDHT {
 	return dm.dht
 }
 
-// SaveDHTRoutingTable сохраняет DHT routing table в кэш
-func (dm *DiscoveryManager) SaveDHTRoutingTable(persistence *PersistenceManager) error {
-	if dm.dht == nil {
-		return fmt.Errorf("DHT недоступен")
+// startXxxMDNS настраивает и запускает mDNS для обнаружения в локальной сети.
+func (dm *DiscoveryManager) startXxxMDNS() {
+	notifee := &mdnsNotifee{
+		host:        dm.host,
+		onPeerFound: dm.onPeerFound,
 	}
-
-	// Получаем все пиры из DHT
-	peers := dm.dht.RoutingTable().ListPeers()
-
-	Info("💾 Сохраняем DHT routing table: %d пиров", len(peers))
-
-	for _, peerID := range peers {
-		// Получаем адреса пира
-		addrs := dm.host.Peerstore().Addrs(peerID)
-		var addrStrings []string
-		for _, addr := range addrs {
-			addrStrings = append(addrStrings, addr.String())
-		}
-
-		// Определяем, является ли пир "здоровым" (есть адреса)
-		healthy := len(addrStrings) > 0
-
-		// Сохраняем в кэш
-		if err := persistence.SavePeerToCache(peerID, addrStrings, healthy); err != nil {
-			Warn("⚠️ Не удалось сохранить пира %s в кэш: %v", peerID.ShortString(), err)
-		}
+	// mDNS будет использовать тот же RendezvousString, что и DHT для единообразия.
+	service := mdns.NewMdnsService(dm.host, dm.cfg.RendezvousString, notifee)
+	if err := service.Start(); err != nil {
+		log.Printf("ERROR: [mDNS] Не удалось запустить сервис: %v", err)
 	}
-
-	Info("✅ DHT routing table сохранена в кэш")
-	return nil
+	log.Println("INFO: [mDNS] Сервис обнаружения в локальной сети запущен.")
 }
 
-// LoadDHTRoutingTableFromCache загружает DHT routing table из кэша
-func (dm *DiscoveryManager) LoadDHTRoutingTableFromCache(persistence *PersistenceManager) error {
-	if dm.dht == nil {
-		return fmt.Errorf("DHT недоступен")
+// startXxxDHT подключается к bootstrap-узлам и запускает обнаружение в глобальной сети.
+func (dm *DiscoveryManager) startXxxDHT() {
+	// 1. Подключаемся к bootstrap-узлам.
+	Info("[DHT] Подключение к bootstrap-узлам...")
+	if err := dm.dht.Bootstrap(dm.ctx); err != nil {
+		Error("[DHT] Ошибка bootstrap: %v", err)
+		return
 	}
+	Info("[DHT] Bootstrap DHT завершен.")
 
-	// Загружаем кэшированных пиров
-	cachedPeers, err := persistence.GetHealthyCachedPeers()
-	if err != nil {
-		return fmt.Errorf("не удалось загрузить кэшированных пиров: %w", err)
-	}
-
-	if len(cachedPeers) == 0 {
-		Info("💾 Кэш пиров пуст, используем только bootstrap узлы")
-		return nil
-	}
-
-	Info("💾 Загружаем DHT routing table из кэша: %d пиров", len(cachedPeers))
-
-	// Добавляем кэшированных пиров в DHT routing table
-	for _, cachedPeer := range cachedPeers {
-		peerID, err := peer.Decode(cachedPeer.PeerID)
-		if err != nil {
-			Warn("⚠️ Неверный Peer ID в кэше: %s", cachedPeer.PeerID)
-			continue
-		}
-
-		// Пытаемся подключиться к кэшированному пиру
-		if err := dm.host.Connect(dm.ctx, peer.AddrInfo{ID: peerID}); err != nil {
-			Warn("⚠️ Не удалось подключиться к кэшированному пиру %s: %v", peerID.ShortString(), err)
-		} else {
-			Info("✅ Подключились к кэшированному пиру %s", peerID.ShortString())
-		}
-	}
-
-	Info("✅ DHT routing table загружена из кэша")
-	return nil
-}
-
-// GetRoutingTableStats возвращает статистику DHT routing table
-func (dm *DiscoveryManager) GetRoutingTableStats() map[string]interface{} {
-	if dm.dht == nil {
-		return map[string]interface{}{
-			"status": "dht_unavailable",
-		}
-	}
-
-	rt := dm.dht.RoutingTable()
-	peers := rt.ListPeers()
-
-	stats := map[string]interface{}{
-		"total_peers": len(peers),
-		"size":        rt.Size(),
-	}
-
-	return stats
-}
-
-// fallbackToCachedPeers пытается подключиться к кэшированным пирам при недоступности bootstrap
-func (dm *DiscoveryManager) fallbackToCachedPeers() error {
-	// Создаем временный PersistenceManager для доступа к кэшу
-	persistence, err := NewPersistenceManager()
-	if err != nil {
-		return fmt.Errorf("не удалось создать PersistenceManager: %w", err)
-	}
-
-	// Загружаем здоровых кэшированных пиров
-	cachedPeers, err := persistence.GetHealthyCachedPeers()
-	if err != nil {
-		return fmt.Errorf("не удалось загрузить кэшированных пиров: %w", err)
-	}
-
-	if len(cachedPeers) == 0 {
-		return fmt.Errorf("кэш пиров пуст")
-	}
-
-	Info("🔄 Пытаемся подключиться к %d кэшированным пирам...", len(cachedPeers))
-
-	// Пытаемся подключиться к кэшированным пирам
-	connectedCount := 0
-	for _, cachedPeer := range cachedPeers {
-		peerID, err := peer.Decode(cachedPeer.PeerID)
-		if err != nil {
-			Warn("⚠️ Неверный Peer ID в кэше: %s", cachedPeer.PeerID)
-			continue
-		}
-
-		// Пытаемся подключиться
-		if err := dm.host.Connect(dm.ctx, peer.AddrInfo{ID: peerID}); err != nil {
-			Warn("⚠️ Не удалось подключиться к кэшированному пиру %s: %v", peerID.ShortString(), err)
-		} else {
-			Info("✅ Подключились к кэшированному пиру %s", peerID.ShortString())
-			connectedCount++
-		}
-	}
-
-	if connectedCount > 0 {
-		Info("✅ Успешно подключились к %d кэшированным пирам", connectedCount)
-		return nil
-	}
-
-	return fmt.Errorf("не удалось подключиться ни к одному кэшированному пиру")
-}
-
-// startMDNSDiscovery запускает mDNS discovery
-func (dm *DiscoveryManager) startMDNSDiscovery() {
-	Info("🏠 Поиск локальных пиров через mDNS...")
-
-	// mDNS работает автоматически через DiscoveryNotifee
-	// Просто ждем завершения контекста
-	<-dm.ctx.Done()
-}
-
-// startDHTDiscovery запускает поиск через DHT
-func (dm *DiscoveryManager) startDHTDiscovery() {
-	// Отправляем событие о начале подключения к DHT
-	if dm.eventManager != nil {
-		event := NetworkStatusEvent("CONNECTING_TO_DHT", "Подключение к bootstrap-узлам...")
-		dm.eventManager.PushEvent(event)
-	}
-
-	Info("🌐 Подключение к bootstrap узлам...")
-
-	// ИЗМЕНЕНИЕ: Ждем, пока мы подключимся хотя бы к одному bootstrap-пиру.
-	// Это гарантирует, что наша таблица не пуста перед анонсом.
+	// 2. Принудительно подключаемся к нескольким bootstrap-пирам, как в PoC.
 	var wg sync.WaitGroup
-	bootstrapConnected := false
+	// Объединяем стандартные и пользовательские bootstrap-узлы
+	allBootstrapAddrs := append(dht.DefaultBootstrapPeers, parseMultiaddrs(dm.cfg.CustomBootstrapNodes)...)
 
-	for _, p := range dht.DefaultBootstrapPeers {
-		peerinfo, _ := peer.AddrInfoFromP2pAddr(p)
+	for _, maddr := range allBootstrapAddrs {
 		wg.Add(1)
-		go func() {
+		go func(peerMaddr multiaddr.Multiaddr) {
 			defer wg.Done()
-			if err := dm.host.Connect(dm.ctx, *peerinfo); err != nil {
-				// Info("Не удалось подключиться к bootstrap-пиру: %s", err)
-			} else {
-				Info("✅ Установлено соединение с bootstrap-пиром: %s", peerinfo.ID.ShortString())
-				bootstrapConnected = true
+			peerInfo, err := peer.AddrInfoFromP2pAddr(peerMaddr)
+			if err != nil {
+				Warn("[DHT] Не удалось распарсить bootstrap-адрес: %v", err)
+				return
 			}
-		}()
+			if err := dm.host.Connect(dm.ctx, *peerInfo); err != nil {
+				Warn("[DHT] Не удалось подключиться к bootstrap-пиру %s: %v", peerInfo.ID.ShortString(), err)
+			} else {
+				Info("[DHT] Установлено соединение с bootstrap-пиром: %s", peerInfo.ID.ShortString())
+			}
+		}(maddr)
 	}
 	wg.Wait()
 
-	// Если не удалось подключиться к bootstrap узлам, пробуем кэшированные пиры
-	if !bootstrapConnected {
-		Info("⚠️ Не удалось подключиться к bootstrap узлам, пробуем кэшированные пиры...")
-		if err := dm.fallbackToCachedPeers(); err != nil {
-			Warn("⚠️ Не удалось подключиться к кэшированным пирам: %v", err)
-		}
-	}
+	// 3. Используем RoutingDiscovery для Rendezvous-механизма из PoC.
+	routingDiscovery := routing.NewRoutingDiscovery(dm.dht)
 
-	Info("📢 Анонсируемся в глобальной сети...")
-	// Используем Ticker для периодического анонсирования, чтобы оставаться видимыми
-	ticker := time.NewTicker(time.Minute * 1)
-	defer ticker.Stop()
-
+	// 4. Постоянно анонсируем свое присутствие в "общей комнате".
 	go func() {
+		ticker := time.NewTicker(dm.cfg.AnnounceInterval)
+		defer ticker.Stop()
 		for {
+			Info("[DHT] Анонсируем себя в rendezvous-точке: %s", dm.cfg.RendezvousString)
+			dutil.Advertise(dm.ctx, routingDiscovery, dm.cfg.RendezvousString)
 			select {
 			case <-dm.ctx.Done():
 				return
 			case <-ticker.C:
-				Info("📢 Повторно анонсируемся в сети...")
-				_, err := dm.routingDiscovery.Advertise(dm.ctx, GLOBAL_RENDEZVOUS)
-				if err != nil {
-					Warn("⚠️ Ошибка повторного анонса: %v", err)
-				}
 			}
 		}
 	}()
 
-	// Первоначальный анонс
-	_, err := dm.routingDiscovery.Advertise(dm.ctx, GLOBAL_RENDEZVOUS)
-	if err != nil {
-		Warn("⚠️ Ошибка первоначального анонса: %v", err)
-	} else {
-		Info("📢 Первоначальный анонс успешен")
-	}
-
-	Info("🔍 Поиск участников в глобальной сети...")
-	peerChan, err := dm.routingDiscovery.FindPeers(dm.ctx, GLOBAL_RENDEZVOUS)
-	if err != nil {
-		Warn("⚠️ Ошибка поиска в глобальной сети: %v", err)
-		return
-	}
-
-	for p := range peerChan {
-		if p.ID == dm.host.ID() {
-			continue
-		}
-
-		Info("🌐 Найден участник в глобальной сети: %s", p.ID.ShortString())
-		dm.notifee.HandlePeerFound(p)
-	}
-
-	// Отправляем событие о готовности сети
-	if dm.eventManager != nil {
-		event := NetworkStatusEvent("NETWORK_READY", "Готов к работе в сети")
-		dm.eventManager.PushEvent(event)
-	}
-}
-
-// GetRoutingDiscovery возвращает routing discovery для внутреннего использования
-func (dm *DiscoveryManager) GetRoutingDiscovery() *routing.RoutingDiscovery {
-	return dm.routingDiscovery
-}
-
-// StartAggressiveDiscovery запускает агрессивный поиск пиров (как в poc.go)
-func (dm *DiscoveryManager) StartAggressiveDiscovery(rendezvous string) {
-	Info("🚀 Запуск агрессивного поиска пиров по rendezvous: %s", rendezvous)
-
+	// 5. Постоянно ищем других пиров в той же "комнате".
 	go func() {
 		for {
-			select {
-			case <-dm.ctx.Done():
-				return
-			default:
-				peerChan, err := dm.routingDiscovery.FindPeers(dm.ctx, rendezvous)
-				if err != nil {
-					Warn("Ошибка поиска пиров: %v", err)
-					time.Sleep(10 * time.Second)
-					continue
-				}
-
+			Info("[DHT] Ищем других пиров в rendezvous-точке: %s", dm.cfg.RendezvousString)
+			peerChan, err := routingDiscovery.FindPeers(dm.ctx, dm.cfg.RendezvousString)
+			if err != nil {
+				Error("[DHT] Ошибка поиска пиров по rendezvous: %v", err)
+			} else {
 				for p := range peerChan {
 					if p.ID == dm.host.ID() {
-						continue
+						continue // Пропускаем себя
 					}
-					Info("Найден пир: %s. Адреса: %v", p.ID, p.Addrs)
-					dm.notifee.HandlePeerFound(p)
+					Info("[DHT] Rendezvous: Найден пир: %s", p.ID.ShortString())
+					dm.onPeerFound(p) // Сообщаем наверх о находке
 				}
-
-				time.Sleep(15 * time.Second) // Повторяем поиск каждые 15 секунд
 			}
-		}
-	}()
-
-	Info("Поиск пиров запущен. Ожидание...")
-}
-
-// StartAggressiveAdvertising запускает агрессивное анонсирование (как в poc.go)
-func (dm *DiscoveryManager) StartAggressiveAdvertising(rendezvous string) {
-	Info("🚀 Запуск агрессивного анонсирования по rendezvous: %s", rendezvous)
-
-	go func() {
-		for {
 			select {
 			case <-dm.ctx.Done():
 				return
-			default:
-				_, err := dm.routingDiscovery.Advertise(dm.ctx, rendezvous)
-				if err != nil {
-					Warn("Ошибка анонсирования: %v", err)
-				} else {
-					Info("🔄 Анонсировано в DHT: %s", rendezvous)
-				}
-				time.Sleep(15 * time.Second) // Повторяем каждые 15 секунд
+			// Пауза между циклами поиска, чтобы не перегружать сеть.
+			case <-time.After(dm.cfg.AnnounceInterval * 2):
 			}
 		}
 	}()
-
-	Info("Анонсирование запущено. Ожидание...")
 }
 
-// FindPeersOnce выполняет однократный поиск пиров
-func (dm *DiscoveryManager) FindPeersOnce(rendezvous string) ([]peer.AddrInfo, error) {
-	Info("🔍 Однократный поиск пиров по rendezvous: %s", rendezvous)
-
-	peerChan, err := dm.routingDiscovery.FindPeers(dm.ctx, rendezvous)
-	if err != nil {
-		return nil, fmt.Errorf("ошибка поиска пиров: %w", err)
-	}
-
-	var peers []peer.AddrInfo
-	for p := range peerChan {
-		if p.ID == dm.host.ID() {
+// parseMultiaddrs - helper-функция для преобразования строк в multi-адреса.
+func parseMultiaddrs(addrs []string) []multiaddr.Multiaddr {
+	var multiaddrs []multiaddr.Multiaddr
+	for _, addrStr := range addrs {
+		maddr, err := multiaddr.NewMultiaddr(addrStr)
+		if err != nil {
+			Warn("Не удалось распарсить multi-адрес '%s': %v", addrStr, err)
 			continue
 		}
-		peers = append(peers, p)
-		Info("Найден пир: %s. Адреса: %v", p.ID, p.Addrs)
+		multiaddrs = append(multiaddrs, maddr)
 	}
-
-	return peers, nil
-}
-
-// AdvertiseOnce выполняет однократное анонсирование
-func (dm *DiscoveryManager) AdvertiseOnce(rendezvous string) error {
-	Info("📢 Однократное анонсирование по rendezvous: %s", rendezvous)
-
-	_, err := dm.routingDiscovery.Advertise(dm.ctx, rendezvous)
-	if err != nil {
-		return fmt.Errorf("ошибка анонсирования: %w", err)
-	}
-
-	Info("📢 Анонсировано в DHT: %s", rendezvous)
-	return nil
+	return multiaddrs
 }

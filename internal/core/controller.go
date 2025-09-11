@@ -1,1175 +1,312 @@
-package core
+// cmd/fyne-gui/new-core/controller.go
+
+package newcore
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"sync"
 	"time"
 
 	"github.com/ipfs/go-cid"
-	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/crypto"
-	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/multiformats/go-multiaddr"
 )
 
-// ICoreController - это публичный интерфейс для всего Core слоя
+const (
+	// PROTOCOL_ID - уникальный идентификатор нашего чат-протокола.
+	PROTOCOL_ID = "/owl-whisper/1.0.0"
+)
+
+// --- Структуры Событий (Контракт с GUI) ---
+
+// Event - это универсальная структура для всех асинхронных событий,
+// отправляемых из Core в GUI.
+type Event struct {
+	Type    string      `json:"type"`
+	Payload interface{} `json:"payload"`
+}
+
+// NewMessagePayload содержит данные для события "NewMessage".
+type NewMessagePayload struct {
+	SenderID string `json:"sender_id"`
+	Data     []byte `json:"data"`
+}
+
+type CoreReadyPayload struct {
+	PeerID string `json:"peer_id"`
+}
+
+// PeerStatusPayload содержит данные для событий "PeerConnected" и "PeerDisconnected".
+type PeerStatusPayload struct {
+	PeerID string `json:"peer_id"`
+}
+
+// --- Интерфейс Контроллера (Публичный API) ---
+
+// ICoreController определяет публичный API для управления P2P-узлом.
+// Весь остальной код (GUI, TUI) будет работать только с этим интерфейсом.
 type ICoreController interface {
-	// Start запускает Core контроллер
 	Start() error
-
-	// Stop останавливает Core контроллер
 	Stop() error
-
-	// Broadcast отправляет данные всем подключенным пирам
-	Broadcast(data []byte) error
-
-	// Send отправляет данные конкретному пиру
-	Send(peerID peer.ID, data []byte) error
-
-	// GetMyID возвращает ID текущего узла
-	GetMyID() string
-
-	// GetConnectedPeers возвращает список подключенных пиров
-	GetConnectedPeers() []peer.ID
-
-	// GetProtectedPeers возвращает список защищенных пиров
-	GetProtectedPeers() []peer.ID
-
-	// AddProtectedPeer добавляет пира в защищенные
-	AddProtectedPeer(peerID peer.ID) error
-
-	// RemoveProtectedPeer удаляет пира из защищенных
-	RemoveProtectedPeer(peerID peer.ID) error
-
-	// IsProtectedPeer проверяет, является ли пир защищенным
-	IsProtectedPeer(peerID peer.ID) bool
-
-	// GetConnectionLimits возвращает текущие лимиты соединений
-	GetConnectionLimits() map[string]interface{}
-
-	// Автопереподключение к защищенным пирам
-	EnableAutoReconnect()
-	DisableAutoReconnect()
-	IsAutoReconnectEnabled() bool
-	GetReconnectAttempts(peerID peer.ID) int
-
-	// GetNetworkStats возвращает статистику сети для отладки
-	GetNetworkStats() map[string]interface{}
-
-	// FindPeer ищет пира в сети по PeerID
-	FindPeer(peerID peer.ID) (*peer.AddrInfo, error)
-
-	// FindProvidersForContent ищет провайдеров контента в DHT по ContentID
+	GetMyPeerID() string
+	GetConnectedPeers() []string
+	SendDataToPeer(peerID string, data []byte) error
+	BroadcastData(data []byte) error
+	FindPeer(peerID string) (*peer.AddrInfo, error)
 	FindProvidersForContent(contentID string) ([]peer.AddrInfo, error)
-
-	// ProvideContent анонсирует текущий узел как провайдера контента в DHT
 	ProvideContent(contentID string) error
-
-	// Connect подключается к пиру по AddrInfo
-	Connect(addrInfo peer.AddrInfo) error
-
-	// GetConnectionQuality возвращает качество соединения с пиром
-	GetConnectionQuality(peerID peer.ID) map[string]interface{}
-
-	// Messages возвращает канал для получения ВСЕХ входящих данных
-	Messages() <-chan RawMessage
-
-	// GetHost возвращает узел
-	GetHost() host.Host
-
-	// Новые методы для работы с профилями
-
-	// Методы кэширования пиров
-	SavePeerToCache(peerID peer.ID, addresses []string, healthy bool) error
-	LoadPeerFromCache(peerID peer.ID) (*PeerCacheEntry, error)
-	GetAllCachedPeers() ([]PeerCacheEntry, error)
-	GetHealthyCachedPeers() ([]PeerCacheEntry, error)
-	RemovePeerFromCache(peerID peer.ID) error
-	ClearPeerCache() error
-
-	// Методы DHT routing table
-	SaveDHTRoutingTable() error
-	LoadDHTRoutingTableFromCache() error
-	GetRoutingTableStats() map[string]interface{}
-	GetDHTRoutingTableSize() int
-
-	// События - единственный канал асинхронной связи с клиентом
-	GetNextEvent() string
-
-	// Агрессивное Discovery и анонсирование (как в poc.go)
-	StartAggressiveDiscovery(rendezvous string)
-	StartAggressiveAdvertising(rendezvous string)
-	FindPeersOnce(rendezvous string) ([]peer.AddrInfo, error)
-	AdvertiseOnce(rendezvous string) error
-
-	// Настройка autorelay с DHT
-	SetupAutoRelayWithDHT(kademliaDHT *dht.IpfsDHT) error
+	GetDHTTableSize() int
+	Events() <-chan Event
 }
 
-// CoreController реализует ICoreController интерфейс
+// --- Реализация Контроллера ---
+
+// CoreController - это конкретная реализация ICoreController.
 type CoreController struct {
-	node      *Node
-	discovery *DiscoveryManager
-
-	ctx    context.Context
-	cancel context.CancelFunc
-
-	// Мьютекс для безопасного доступа
-	mu sync.RWMutex
-
-	// Статус работы
-	running bool
-
-	// Периодическое анонсирование
-	announcementTicker *time.Ticker
-	lastContentID      string
-	lastAnnounceTime   time.Time
+	ctx            context.Context
+	cancel         context.CancelFunc
+	cfg            Config
+	privKey        crypto.PrivKey
+	node           *Node
+	discovery      *DiscoveryManager
+	eventChan      chan Event
+	connectedPeers map[peer.ID]bool
+	mu             sync.RWMutex
 }
 
-// NewCoreController создает новый Core контроллер (для обратной совместимости)
-func NewCoreController(ctx context.Context) (*CoreController, error) {
-	ctx, cancel := context.WithCancel(ctx)
-
-	// Создаем Node
-	node, err := NewNode(ctx)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("не удалось создать Node: %w", err)
-	}
-
-	return createControllerFromNode(ctx, cancel, node)
+// NewCoreController - конструктор для нашего контроллера.
+func NewCoreController(privKey crypto.PrivKey, cfg Config) (ICoreController, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &CoreController{
+		ctx:            ctx,
+		cancel:         cancel,
+		cfg:            cfg,
+		privKey:        privKey,
+		eventChan:      make(chan Event, 100), // Буферизированный канал
+		connectedPeers: make(map[peer.ID]bool),
+	}, nil
 }
 
-// NewCoreControllerWithKey создает новый Core контроллер с переданным ключом
-func NewCoreControllerWithKey(ctx context.Context, privKey crypto.PrivKey) (*CoreController, error) {
-	ctx, cancel := context.WithCancel(ctx)
-
-	// Создаем PersistenceManager
-	persistence, err := NewPersistenceManager()
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("не удалось создать PersistenceManager: %w", err)
-	}
-
-	// Создаем Node с переданным ключом
-	node, err := NewNodeWithKey(ctx, privKey, persistence)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("не удалось создать Node с ключом: %w", err)
-	}
-
-	return createControllerFromNode(ctx, cancel, node)
-}
-
-// NewCoreControllerWithKeyBytes создает новый Core контроллер с переданными байтами ключа
-func NewCoreControllerWithKeyBytes(ctx context.Context, keyBytes []byte) (*CoreController, error) {
-	ctx, cancel := context.WithCancel(ctx)
-
-	// Создаем PersistenceManager
-	persistence, err := NewPersistenceManager()
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("не удалось создать PersistenceManager: %w", err)
-	}
-
-	// Создаем Node с переданными байтами ключа
-	node, err := NewNodeWithKeyBytes(ctx, keyBytes, persistence)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("не удалось создать Node с байтами ключа: %w", err)
-	}
-
-	return createControllerFromNode(ctx, cancel, node)
-}
-
-// NewCoreControllerWithKeyBytesAndConfig создает новый Core контроллер с байтами ключа и конфигурацией
-func NewCoreControllerWithKeyBytesAndConfig(ctx context.Context, keyBytes []byte, config *NodeConfig) (*CoreController, error) {
-	ctx, cancel := context.WithCancel(ctx)
-
-	// Создаем PersistenceManager
-	persistence, err := NewPersistenceManager()
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("не удалось создать PersistenceManager: %w", err)
-	}
-
-	// Десериализуем ключ из байтов
-	privKey, err := crypto.UnmarshalPrivateKey(keyBytes)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("не удалось десериализовать ключ из байтов: %w", err)
-	}
-
-	// Создаем Node с ключом и конфигурацией
-	node, err := NewNodeWithKeyAndConfig(ctx, privKey, persistence, config)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("не удалось создать Node с ключом и конфигурацией: %w", err)
-	}
-
-	return createControllerFromNode(ctx, cancel, node)
-}
-
-// NewCoreControllerWithConfig создает новый Core контроллер с кастомной конфигурацией
-func NewCoreControllerWithConfig(ctx context.Context, config *NodeConfig) (*CoreController, error) {
-	ctx, cancel := context.WithCancel(ctx)
-
-	// Создаем PersistenceManager
-	persistence, err := NewPersistenceManager()
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("не удалось создать PersistenceManager: %w", err)
-	}
-
-	// Загружаем или создаем ключ идентичности
-	privKey, err := persistence.LoadOrCreateIdentity()
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("не удалось загрузить/создать ключ идентичности: %w", err)
-	}
-
-	// Создаем Node с конфигурацией
-	node, err := NewNodeWithKeyAndConfig(ctx, privKey, persistence, config)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("не удалось создать Node с конфигурацией: %w", err)
-	}
-
-	return createControllerFromNode(ctx, cancel, node)
-}
-
-// NewCoreControllerWithKeyAndConfig создает новый Core контроллер с ключом и конфигурацией
-func NewCoreControllerWithKeyAndConfig(ctx context.Context, privKey crypto.PrivKey, config *NodeConfig) (*CoreController, error) {
-	ctx, cancel := context.WithCancel(ctx)
-
-	// Создаем PersistenceManager
-	persistence, err := NewPersistenceManager()
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("не удалось создать PersistenceManager: %w", err)
-	}
-
-	// Создаем Node с ключом и конфигурацией
-	node, err := NewNodeWithKeyAndConfig(ctx, privKey, persistence, config)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("не удалось создать Node с ключом и конфигурацией: %w", err)
-	}
-
-	return createControllerFromNode(ctx, cancel, node)
-}
-
-// createControllerFromNode создает контроллер из готового узла
-func createControllerFromNode(ctx context.Context, cancel context.CancelFunc, node *Node) (*CoreController, error) {
-	// Создаем DiscoveryManager с callback для новых пиров
-	discovery, err := NewDiscoveryManager(ctx, node.GetHost(), func(pi peer.AddrInfo) {
-		// Когда найден новый пир, добавляем его в Node
-		node.AddPeer(pi.ID)
-	}, node.GetEventManager())
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("не удалось создать DiscoveryManager: %w", err)
-	}
-
-	controller := &CoreController{
-		node:      node,
-		discovery: discovery,
-		ctx:       ctx,
-		cancel:    cancel,
-	}
-
-	return controller, nil
-}
-
-// Start запускает Core контроллер
 func (c *CoreController) Start() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	var err error
 
-	if c.running {
-		return fmt.Errorf("контроллер уже запущен")
-	}
-
-	// Запускаем Node
-	if err := c.node.Start(); err != nil {
-		return fmt.Errorf("не удалось запустить Node: %w", err)
-	}
-
-	// Запускаем Discovery
-	if err := c.discovery.Start(); err != nil {
-		return fmt.Errorf("не удалось запустить Discovery: %w", err)
-	}
-
-	c.running = true
-	Info("🚀 Core контроллер запущен")
-
-	// Запускаем периодическое анонсирование если есть ContentID
-	if c.lastContentID != "" {
-		c.startPeriodicAnnouncement()
-	}
-
-	return nil
-}
-
-// Stop останавливает Core контроллер
-func (c *CoreController) Stop() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if !c.running {
-		return nil
-	}
-
-	// Останавливаем Discovery
-	if err := c.discovery.Stop(); err != nil {
-		Warn("⚠️ Ошибка остановки Discovery: %v", err)
-	}
-
-	// Останавливаем Node
-	if err := c.node.Stop(); err != nil {
-		Warn("⚠️ Ошибка остановки Discovery: %v", err)
-	}
-
-	// Останавливаем периодическое анонсирование
-	if c.announcementTicker != nil {
-		c.announcementTicker.Stop()
-		c.announcementTicker = nil
-	}
-
-	// Отменяем контекст
-	c.cancel()
-
-	c.running = false
-	Info("🛑 Core контроллер остановлен")
-
-	return nil
-}
-
-// Broadcast отправляет данные всем подключенным пирам
-func (c *CoreController) Broadcast(data []byte) error {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	if !c.running {
-		return fmt.Errorf("контроллер не запущен")
-	}
-
-	return c.node.Broadcast(data)
-}
-
-// Send отправляет данные конкретному пиру
-func (c *CoreController) Send(peerID peer.ID, data []byte) error {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	if !c.running {
-		return fmt.Errorf("контроллер не запущен")
-	}
-
-	return c.node.Send(peerID, data)
-}
-
-// GetMyID возвращает ID текущего узла
-func (c *CoreController) GetMyID() string {
-	return c.node.GetMyID()
-}
-
-// GetConnectedPeers возвращает список подключенных пиров
-func (c *CoreController) GetConnectedPeers() []peer.ID {
-	return c.node.GetConnectedPeers()
-}
-
-// GetProtectedPeers возвращает список защищенных пиров
-func (c *CoreController) GetProtectedPeers() []peer.ID {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	if !c.running {
-		return nil
-	}
-
-	return c.node.GetProtectedPeers()
-}
-
-// AddProtectedPeer добавляет пира в защищенные
-func (c *CoreController) AddProtectedPeer(peerID peer.ID) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if !c.running {
-		return fmt.Errorf("контроллер не запущен")
-	}
-
-	c.node.AddProtectedPeer(peerID)
-	return nil
-}
-
-// RemoveProtectedPeer удаляет пира из защищенных
-func (c *CoreController) RemoveProtectedPeer(peerID peer.ID) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if !c.running {
-		return fmt.Errorf("контроллер не запущен")
-	}
-
-	if !c.node.IsProtectedPeer(peerID) {
-		return fmt.Errorf("пир %s не является защищенным", peerID.ShortString())
-	}
-
-	c.node.RemoveProtectedPeer(peerID)
-	return nil
-}
-
-// IsProtectedPeer проверяет, является ли пир защищенным
-func (c *CoreController) IsProtectedPeer(peerID peer.ID) bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	if !c.running {
-		return false
-	}
-
-	return c.node.IsProtectedPeer(peerID)
-}
-
-// GetConnectionLimits возвращает текущие лимиты соединений
-func (c *CoreController) GetConnectionLimits() map[string]interface{} {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	if !c.running {
-		return map[string]interface{}{
-			"status": "not_running",
-		}
-	}
-
-	return c.node.GetConnectionLimits()
-}
-
-// EnableAutoReconnect включает автопереподключение к защищенным пирам
-func (c *CoreController) EnableAutoReconnect() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if !c.running {
-		return
-	}
-
-	c.node.EnableAutoReconnect()
-}
-
-// DisableAutoReconnect отключает автопереподключение к защищенным пирам
-func (c *CoreController) DisableAutoReconnect() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if !c.running {
-		return
-	}
-
-	c.node.DisableAutoReconnect()
-}
-
-// IsAutoReconnectEnabled проверяет, включено ли автопереподключение
-func (c *CoreController) IsAutoReconnectEnabled() bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	if !c.running {
-		return false
-	}
-
-	return c.node.IsAutoReconnectEnabled()
-}
-
-// GetReconnectAttempts возвращает количество попыток переподключения для пира
-func (c *CoreController) GetReconnectAttempts(peerID peer.ID) int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	if !c.running {
-		return 0
-	}
-
-	return c.node.GetReconnectAttempts(peerID)
-}
-
-// GetNetworkStats возвращает статистику сети для отладки
-func (c *CoreController) GetNetworkStats() map[string]interface{} {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	if !c.running {
-		return map[string]interface{}{
-			"status": "not_running",
-		}
-	}
-
-	host := c.node.GetHost()
-	if host == nil {
-		return map[string]interface{}{
-			"status": "no_host",
-		}
-	}
-
-	// Получаем статистику из libp2p
-	network := host.Network()
-	peers := network.Peers()
-	connections := network.Conns()
-
-	// Подсчитываем активные соединения по протоколам
-	protocolStats := make(map[string]int)
-	for _, conn := range connections {
-		for _, stream := range conn.GetStreams() {
-			protocol := string(stream.Protocol())
-			protocolStats[protocol]++
-		}
-	}
-
-	// Получаем информацию о DHT
-	dhtStats := map[string]interface{}{
-		"status": "unknown",
-	}
-	if c.discovery != nil {
-		// TODO: Добавить реальную статистику DHT
-		dhtStats["status"] = "active"
-	}
-
-	stats := map[string]interface{}{
-		"status":            "running",
-		"total_peers":       len(peers),
-		"connected_peers":   len(c.node.GetConnectedPeers()),
-		"total_connections": len(connections),
-		"protocols":         protocolStats,
-		"dht":               dhtStats,
-		"my_peer_id":        c.GetMyID(),
-		"listening_addrs":   host.Addrs(),
-	}
-
-	return stats
-}
-
-// FindPeer ищет пира в сети по PeerID
-func (c *CoreController) FindPeer(peerID peer.ID) (*peer.AddrInfo, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	if !c.running {
-		return nil, fmt.Errorf("контроллер не запущен")
-	}
-
-	// Сначала проверяем, подключены ли мы уже к этому пиру
-	if c.node.IsConnected(peerID) {
-		host := c.node.GetHost()
-		addrs := host.Peerstore().Addrs(peerID)
-		return &peer.AddrInfo{
-			ID:    peerID,
-			Addrs: addrs,
-		}, nil
-	}
-
-	// Если не подключены, ищем через DHT
-	if c.discovery != nil {
-		// Получаем DHT из discovery manager
-		dht := c.discovery.GetDHT()
-		if dht == nil {
-			return nil, fmt.Errorf("DHT недоступен")
-		}
-
-		// Создаем контекст с таймаутом для DHT поиска
-		// 30 секунд - разумное значение для публичной DHT
-		findCtx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
-		defer cancel()
-
-		// Ищем пира через DHT
-		addrInfo, err := dht.FindPeer(findCtx, peerID)
-		if err != nil {
-			// Проверяем, является ли это ошибкой "не найден"
-			if err.Error() == "routing: not found" {
-				return nil, fmt.Errorf("пир %s не найден в DHT (вероятно, офлайн)", peerID.ShortString())
-			}
-			return nil, fmt.Errorf("ошибка при поиске в DHT: %w", err)
-		}
-
-		Info("SUCCESS: Пир %s успешно найден в DHT", addrInfo.ID.ShortString())
-		return &addrInfo, nil
-	}
-
-	return nil, fmt.Errorf("discovery manager не доступен")
-}
-
-// FindProvidersForContent ищет провайдеров контента в DHT по ContentID
-func (c *CoreController) FindProvidersForContent(contentID string) ([]peer.AddrInfo, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	if !c.running {
-		return nil, fmt.Errorf("контроллер не запущен")
-	}
-
-	if c.discovery == nil {
-		return nil, fmt.Errorf("DiscoveryManager недоступен")
-	}
-
-	// Получаем DHT напрямую
-	dht := c.discovery.GetDHT()
-	if dht == nil {
-		return nil, fmt.Errorf("DHT недоступен")
-	}
-
-	Info("🔍 Начинаем поиск провайдеров в DHT...")
-	Info("📢 ContentID для поиска: %s", contentID)
-	Info("🆔 Наш Peer ID: %s", c.node.GetHost().ID().String())
-
-	// Детальная диагностика DHT состояния
-	Info("🌐 Наши адреса: %v", c.node.GetHost().Addrs())
-	Info("🔗 Количество активных соединений: %d", len(c.node.GetHost().Network().Conns()))
-	Info("📊 Размер DHT routing table: %d", c.GetDHTRoutingTableSize())
-
-	// Проверяем подключение к bootstrap узлам
-	bootstrapPeers := []string{
-		"QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
-		"QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
-		"QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
-	}
-	for _, bpID := range bootstrapPeers {
-		if bpPeerID, err := peer.Decode(bpID); err == nil {
-			if c.node.GetHost().Network().Connectedness(bpPeerID) == network.Connected {
-				Info("✅ Подключен к bootstrap узлу: %s", bpID)
-			} else {
-				Info("❌ НЕ подключен к bootstrap узлу: %s", bpID)
-			}
-		}
-	}
-
-	// Декодируем ContentID в CID
-	cid, err := cid.Decode(contentID)
+	// 1. Создаем узел
+	c.node, err = NewNode(c.ctx, c.privKey, c.cfg)
 	if err != nil {
-		Error("❌ Ошибка декодирования ContentID: %v", err)
-		return nil, fmt.Errorf("ошибка декодирования ContentID: %w", err)
+		return fmt.Errorf("ошибка создания узла: %w", err)
+	}
+	c.pushEvent("CoreReady", CoreReadyPayload{
+		PeerID: c.node.Host().ID().String(),
+	})
+	// 2. Регистрируем обработчик входящих потоков
+	c.node.SetStreamHandler(PROTOCOL_ID, c.handleStream)
+	// Регистрируем обработчик сетевых событий для отслеживания подключений
+	c.node.Host().Network().Notify(c.newNetworkNotifee())
+
+	// 3. Создаем и запускаем менеджер обнаружения
+	c.discovery, err = NewDiscoveryManager(c.ctx, c.node.Host(), c.cfg, c.onPeerFound)
+	if err != nil {
+		return fmt.Errorf("ошибка создания DiscoveryManager: %w", err)
+	}
+	c.discovery.Start()
+
+	log.Println("INFO: [Controller] Ядро успешно запущено.")
+	return nil
+}
+
+func (c *CoreController) Stop() error {
+	Info("[Controller] Остановка ядра...")
+	c.cancel()
+	if c.node != nil {
+		if err := c.node.Close(); err != nil {
+			return err
+		}
+	}
+	close(c.eventChan)
+	return nil
+}
+
+func (c *CoreController) GetMyPeerID() string {
+	if c.node == nil || c.node.Host() == nil {
+		return ""
+	}
+	return c.node.Host().ID().String()
+}
+
+func (c *CoreController) GetConnectedPeers() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	peers := make([]string, 0, len(c.connectedPeers))
+	for p := range c.connectedPeers {
+		peers = append(peers, p.String())
+	}
+	return peers
+}
+
+func (c *CoreController) SendDataToPeer(peerIDStr string, data []byte) error {
+	peerID, err := peer.Decode(peerIDStr)
+	if err != nil {
+		return fmt.Errorf("неверный PeerID: %w", err)
 	}
 
-	Info("🔑 Декодированный CID: %s", cid.String())
-	Info("📡 Используем прямой DHT API для поиска")
-	Info("⏱️ Таймаут поиска: 60 секунд")
+	stream, err := c.node.Host().NewStream(c.ctx, peerID, PROTOCOL_ID)
+	if err != nil {
+		return fmt.Errorf("не удалось открыть поток: %w", err)
+	}
+	defer stream.Close()
 
-	findCtx, cancel := context.WithTimeout(c.ctx, 60*time.Second) // Увеличиваем таймаут
+	_, err = stream.Write(data)
+	return err
+}
+
+func (c *CoreController) BroadcastData(data []byte) error {
+	peersStr := c.GetConnectedPeers()
+	for _, pStr := range peersStr {
+		// Запускаем отправку в горутинах, чтобы не блокировать
+		go func(p string) {
+			if err := c.SendDataToPeer(p, data); err != nil {
+				log.Printf("WARN: Не удалось отправить broadcast-сообщение пиру %s: %v", p, err)
+			}
+		}(pStr)
+	}
+	return nil
+}
+
+func (c *CoreController) FindPeer(peerIDStr string) (*peer.AddrInfo, error) {
+	peerID, err := peer.Decode(peerIDStr)
+	if err != nil {
+		return nil, fmt.Errorf("неверный PeerID: %w", err)
+	}
+
+	findCtx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
 	defer cancel()
 
-	// Используем прямой DHT API вместо routingDiscovery
-	Info("🔎 Вызываем dht.FindProviders напрямую...")
-	providers, err := dht.FindProviders(findCtx, cid)
+	addrInfo, err := c.discovery.DHT().FindPeer(findCtx, peerID)
 	if err != nil {
-		Error("❌ Ошибка при поиске провайдеров в DHT: %v", err)
+		return nil, err // dht.FindPeer уже возвращает понятные ошибки
+	}
+	return &addrInfo, nil
+}
+
+func (c *CoreController) ProvideContent(contentID string) error {
+	cid, err := cid.Decode(contentID)
+	if err != nil {
+		return err
+	}
+	provideCtx, cancel := context.WithTimeout(c.ctx, 60*time.Second)
+	defer cancel()
+	return c.discovery.DHT().Provide(provideCtx, cid, true)
+}
+
+func (c *CoreController) FindProvidersForContent(contentID string) ([]peer.AddrInfo, error) {
+	cid, err := cid.Decode(contentID)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка декодирования CID: %w", err)
+	}
+
+	findCtx, cancel := context.WithTimeout(c.ctx, 60*time.Second)
+	defer cancel()
+
+	allProviders, err := c.discovery.DHT().FindProviders(findCtx, cid)
+	if err != nil {
 		return nil, fmt.Errorf("ошибка при поиске провайдеров в DHT: %w", err)
 	}
 
-	// Если провайдеры не найдены, пробуем через routingDiscovery
-	if len(providers) == 0 {
-		Info("🔍 Провайдеры не найдены через DHT, пробуем через routingDiscovery...")
-		if rd := c.discovery.GetRoutingDiscovery(); rd != nil {
-			// Ищем через routingDiscovery
-			peerChan, err := rd.FindPeers(findCtx, contentID)
-			if err != nil {
-				Warn("⚠️ Ошибка поиска через routingDiscovery: %v", err)
-			} else {
-				// Собираем найденных пиров
-				for p := range peerChan {
-					if p.ID != c.node.GetHost().ID() {
-						providers = append(providers, p)
-						Info("🔍 Найден пир через routingDiscovery: %s", p.ID.ShortString())
-					}
-				}
-			}
+	// Теперь allProviders - это []peer.AddrInfo, как и должно быть.
+	// Фильтруем самих себя из списка.
+	var filteredProviders []peer.AddrInfo
+	myID := c.node.Host().ID()
+	for _, p := range allProviders {
+		if p.ID != myID {
+			filteredProviders = append(filteredProviders, p)
 		}
 	}
 
-	Info("📡 Поиск завершен, обрабатываем результаты...")
-	Info("📊 Найдено провайдеров: %d", len(providers))
-
-	// Фильтруем провайдеров, исключая себя
-	var validProviders []peer.AddrInfo
-	for i, peerInfo := range providers {
-		Info("🔍 Найден пир #%d: %s", i+1, peerInfo.ID.String())
-		Info("📍 Адреса пира: %v", peerInfo.Addrs)
-
-		// Мы не хотим возвращать адрес самого себя, если нашли
-		if peerInfo.ID != c.node.GetHost().ID() {
-			validProviders = append(validProviders, peerInfo)
-			Info("✅ Пир %s добавлен в список провайдеров", peerInfo.ID.ShortString())
-		} else {
-			Info("⚠️ Пропускаем себя (Peer ID совпадает)")
-		}
+	if len(filteredProviders) == 0 {
+		// Это не ошибка, а нормальный результат, если никто не найден.
+		return nil, fmt.Errorf("провайдеры для контента не найдены")
 	}
 
-	Info("📊 Фильтрация завершена. Валидных провайдеров: %d", len(validProviders))
-
-	if len(validProviders) == 0 {
-		Warn("⚠️ Провайдеры для контента '%s' не найдены", contentID)
-		return nil, fmt.Errorf("провайдеры для контента '%s' не найдены", contentID)
-	}
-
-	Info("✅ SUCCESS: Найдены провайдеры для контента %s", contentID)
-	for i, provider := range validProviders {
-		Info("📋 Провайдер #%d: %s (%v)", i+1, provider.ID.ShortString(), provider.Addrs)
-	}
-
-	return validProviders, nil
+	return filteredProviders, nil
+}
+func (c *CoreController) GetDHTTableSize() int {
+	return c.discovery.DHT().RoutingTable().Size()
 }
 
-// ProvideContent анонсирует текущий узел как провайдера контента в DHT
-func (c *CoreController) ProvideContent(contentID string) error {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+func (c *CoreController) Events() <-chan Event {
+	return c.eventChan
+}
 
-	if !c.running {
-		return fmt.Errorf("контроллер не запущен")
-	}
-
-	if c.discovery == nil {
-		return fmt.Errorf("DiscoveryManager недоступен")
-	}
-
-	// Получаем DHT напрямую
-	dht := c.discovery.GetDHT()
-	if dht == nil {
-		return fmt.Errorf("DHT недоступен")
-	}
-
-	Info("🔍 Начинаем анонсирование в DHT...")
-	Info("📢 ContentID для анонсирования: %s", contentID)
-	Info("🆔 Наш Peer ID: %s", c.node.GetHost().ID().String())
-	Info("🌐 Наши адреса: %v", c.node.GetHost().Addrs())
-
-	// Декодируем ContentID в CID
-	cid, err := cid.Decode(contentID)
+// handleStream - это наш главный обработчик входящих сообщений.
+func (c *CoreController) handleStream(stream network.Stream) {
+	defer stream.Close()
+	senderID := stream.Conn().RemotePeer()
+	data, err := io.ReadAll(stream)
 	if err != nil {
-		Error("❌ Ошибка декодирования ContentID: %v", err)
-		return fmt.Errorf("ошибка декодирования ContentID: %w", err)
+		log.Printf("ERROR: Не удалось прочитать данные из потока от %s: %v", senderID.ShortString(), err)
+		return
 	}
 
-	Info("🔑 Декодированный CID: %s", cid.String())
-
-	// Анонсируем себя как провайдера для данного CID
-	// Используем прямой DHT API вместо routingDiscovery
-	provideCtx, cancel := context.WithTimeout(c.ctx, 60*time.Second) // Даем больше времени
-	defer cancel()
-
-	Info("📡 Вызываем dht.Provide напрямую...")
-	err = dht.Provide(provideCtx, cid, true) // true = анонсировать
-	if err != nil {
-		Error("❌ Ошибка при анонсировании контента в DHT: %v", err)
-		return fmt.Errorf("ошибка при анонсировании контента в DHT: %w", err)
-	}
-
-	Info("✅ SUCCESS: Узел %s анонсирован как провайдер для контента %s", c.node.GetHost().ID().ShortString(), contentID)
-	Info("🌍 Анонсирование завершено! Теперь другие пиры могут найти нас по ContentID: %s", contentID)
-
-	// Сохраняем информацию об анонсе для периодического повторения
-	c.lastContentID = contentID
-	c.lastAnnounceTime = time.Now()
-
-	// Запускаем периодическое анонсирование
-	c.startPeriodicAnnouncement()
-
-	// Также анонсируемся через routingDiscovery для лучшей видимости
-	if rd := c.discovery.GetRoutingDiscovery(); rd != nil {
-		go func() {
-			// Анонсируемся каждые 30 секунд
-			ticker := time.NewTicker(30 * time.Second)
-			defer ticker.Stop()
-
-			for {
-				select {
-				case <-c.ctx.Done():
-					return
-				case <-ticker.C:
-					Info("📢 Повторное анонсирование через routingDiscovery...")
-					if _, err := rd.Advertise(c.ctx, contentID); err != nil {
-						Warn("⚠️ Ошибка повторного анонса: %v", err)
-					} else {
-						Info("✅ Повторный анонс успешен")
-					}
-				}
-			}
-		}()
-	}
-
-	// Проверяем статус DHT
-	rt := dht.RoutingTable()
-	if rt != nil {
-		Info("📊 DHT Routing Table: %d пиров", rt.Size())
-	}
-
-	return nil
+	c.pushEvent("NewMessage", NewMessagePayload{
+		SenderID: senderID.String(),
+		Data:     data,
+	})
 }
 
-// Connect подключается к пиру по AddrInfo
-func (c *CoreController) Connect(addrInfo peer.AddrInfo) error {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	if c.node == nil {
-		return fmt.Errorf("узел недоступен")
-	}
-
-	// Проверяем, не подключены ли уже
-	if c.node.IsConnected(addrInfo.ID) {
-		Info("✅ Уже подключены к %s", addrInfo.ID.ShortString())
-		return nil
-	}
-
-	// Подключаемся к пиру
-	connectCtx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
-	defer cancel()
-
-	err := c.node.GetHost().Connect(connectCtx, addrInfo)
-	if err != nil {
-		return fmt.Errorf("ошибка подключения к %s: %w", addrInfo.ID.ShortString(), err)
-	}
-
-	Info("✅ Успешно подключились к %s", addrInfo.ID.ShortString())
-	return nil
-}
-
-// GetConnectionQuality возвращает качество соединения с пиром
-func (c *CoreController) GetConnectionQuality(peerID peer.ID) map[string]interface{} {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	if !c.running {
-		return map[string]interface{}{
-			"status": "not_running",
-		}
-	}
-
-	// Проверяем, подключены ли мы к этому пиру
-	if !c.node.IsConnected(peerID) {
-		return map[string]interface{}{
-			"status": "not_connected",
-		}
-	}
-
-	host := c.node.GetHost()
-	if host == nil {
-		return map[string]interface{}{
-			"status": "no_host",
-		}
-	}
-
-	// Получаем информацию о соединении
-	network := host.Network()
-	connections := network.ConnsToPeer(peerID)
-
-	if len(connections) == 0 {
-		return map[string]interface{}{
-			"status": "no_connections",
-		}
-	}
-
-	// Анализируем качество соединения
-	var totalStreams int
-	var activeStreams int
-	protocols := make(map[string]int)
-
-	for _, conn := range connections {
-		streams := conn.GetStreams()
-		totalStreams += len(streams)
-
-		for _, stream := range streams {
-			protocol := string(stream.Protocol())
-			protocols[protocol]++
-
-			// Проверяем, активен ли стрим
-			if !stream.Stat().Opened.IsZero() {
-				activeStreams++
-			}
-		}
-	}
-
-	// Получаем адреса пира
-	addrs := host.Peerstore().Addrs(peerID)
-
-	quality := map[string]interface{}{
-		"status":            "connected",
-		"peer_id":           peerID.String(),
-		"total_connections": len(connections),
-		"total_streams":     totalStreams,
-		"active_streams":    activeStreams,
-		"protocols":         protocols,
-		"addresses":         addrs,
-		"latency_ms":        -1, // TODO: Реализовать измерение латентности
-	}
-
-	return quality
-}
-
-// Messages возвращает канал для получения входящих сообщений
-func (c *CoreController) Messages() <-chan RawMessage {
-	return c.node.Messages()
-}
-
-// GetHost возвращает узел
-func (c *CoreController) GetHost() host.Host {
-	return c.node.GetHost()
-}
-
-// SavePeerToCache сохраняет пира в кэш
-func (c *CoreController) SavePeerToCache(peerID peer.ID, addresses []string, healthy bool) error {
-	if c.node == nil {
-		return fmt.Errorf("Node недоступен")
-	}
-	return c.node.SavePeerToCache(peerID, addresses, healthy)
-}
-
-// LoadPeerFromCache загружает пира из кэша
-func (c *CoreController) LoadPeerFromCache(peerID peer.ID) (*PeerCacheEntry, error) {
-	if c.node == nil {
-		return nil, fmt.Errorf("Node недоступен")
-	}
-	return c.node.LoadPeerFromCache(peerID)
-}
-
-// GetAllCachedPeers возвращает всех кэшированных пиров
-func (c *CoreController) GetAllCachedPeers() ([]PeerCacheEntry, error) {
-	if c.node == nil {
-		return nil, fmt.Errorf("Node недоступен")
-	}
-	return c.node.GetAllCachedPeers()
-}
-
-// GetHealthyCachedPeers возвращает только "здоровых" кэшированных пиров
-func (c *CoreController) GetHealthyCachedPeers() ([]PeerCacheEntry, error) {
-	if c.node == nil {
-		return nil, fmt.Errorf("Node недоступен")
-	}
-	return c.node.GetHealthyCachedPeers()
-}
-
-// RemovePeerFromCache удаляет пира из кэша
-func (c *CoreController) RemovePeerFromCache(peerID peer.ID) error {
-	if c.node == nil {
-		return fmt.Errorf("Node недоступен")
-	}
-	return c.node.RemovePeerFromCache(peerID)
-}
-
-// ClearPeerCache очищает весь кэш пиров
-func (c *CoreController) ClearPeerCache() error {
-	if c.node == nil {
-		return fmt.Errorf("Node недоступен")
-	}
-	return c.node.ClearPeerCache()
-}
-
-// SaveDHTRoutingTable сохраняет DHT routing table в кэш
-func (c *CoreController) SaveDHTRoutingTable() error {
-	if c.discovery == nil {
-		return fmt.Errorf("DiscoveryManager недоступен")
-	}
-	return c.discovery.SaveDHTRoutingTable(c.node.persistence)
-}
-
-// LoadDHTRoutingTableFromCache загружает DHT routing table из кэша
-func (c *CoreController) LoadDHTRoutingTableFromCache() error {
-	if c.discovery == nil {
-		return fmt.Errorf("DiscoveryManager недоступен")
-	}
-	return c.discovery.LoadDHTRoutingTableFromCache(c.node.persistence)
-}
-
-// GetRoutingTableStats возвращает статистику DHT routing table
-func (c *CoreController) GetRoutingTableStats() map[string]interface{} {
-	if c.discovery == nil {
-		return map[string]interface{}{
-			"status": "discovery_unavailable",
-		}
-	}
-	return c.discovery.GetRoutingTableStats()
-}
-
-// GetDHTRoutingTableSize возвращает размер DHT routing table для отладки
-func (c *CoreController) GetDHTRoutingTableSize() int {
-	if c.discovery == nil {
-		return 0
-	}
-
-	dht := c.discovery.GetDHT()
-	if dht == nil {
-		return 0
-	}
-
-	rt := dht.RoutingTable()
-	if rt == nil {
-		return 0
-	}
-
-	return rt.Size()
-}
-
-// IsRunning проверяет, запущен ли контроллер
-func (c *CoreController) IsRunning() bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	return c.running
-}
-
-// IsConnected проверяет, подключен ли указанный пир
-func (c *CoreController) IsConnected(peerID peer.ID) bool {
-	return c.node.IsConnected(peerID)
-}
-
-// GetNextEvent блокирующе получает следующее событие из очереди
-func (c *CoreController) GetNextEvent() string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	if !c.running {
-		return ""
-	}
-
-	if c.node == nil || c.node.GetEventManager() == nil {
-		return ""
-	}
-
-	event, err := c.node.GetEventManager().GetNextEvent()
-	if err != nil {
-		return ""
-	}
-
-	// Сериализуем событие в JSON
-	jsonData, err := json.Marshal(event)
-	if err != nil {
-		return ""
-	}
-
-	return string(jsonData)
-}
-
-// startPeriodicAnnouncement запускает периодическое повторное анонсирование
-func (c *CoreController) startPeriodicAnnouncement() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Останавливаем предыдущий ticker если есть
-	if c.announcementTicker != nil {
-		c.announcementTicker.Stop()
-	}
-
-	// Создаем новый ticker для анонсирования каждые 5 минут
-	c.announcementTicker = time.NewTicker(5 * time.Minute)
-
+// onPeerFound - колбэк, который вызывается DiscoveryManager'ом.
+func (c *CoreController) onPeerFound(pi peer.AddrInfo) {
+	// Пытаемся подключиться к найденному пиру в фоновом режиме.
 	go func() {
-		for {
-			select {
-			case <-c.announcementTicker.C:
-				c.repeatAnnouncement()
-			case <-c.ctx.Done():
-				return
-			}
+		if err := c.node.Host().Connect(c.ctx, pi); err != nil {
+			// log.Printf("WARN: Не удалось подключиться к найденному пиру %s: %v", pi.ID.ShortString(), err)
 		}
 	}()
-
-	Info("🔄 Запущено периодическое анонсирование каждые 5 минут")
 }
 
-// repeatAnnouncement повторяет анонс контента
-func (c *CoreController) repeatAnnouncement() {
-	c.mu.RLock()
-	if c.lastContentID == "" {
-		c.mu.RUnlock()
-		return
+// pushEvent - потокобезопасный способ отправить событие в GUI.
+func (c *CoreController) pushEvent(eventType string, payload interface{}) {
+	select {
+	case c.eventChan <- Event{Type: eventType, Payload: payload}:
+	default:
+		log.Printf("WARN: Очередь событий переполнена. Событие типа '%s' было отброшено.", eventType)
 	}
-	contentID := c.lastContentID
-	c.mu.RUnlock()
-
-	Info("🔄 Повторное анонсирование контента: %s", contentID)
-
-	// Получаем DHT
-	if c.discovery == nil {
-		Warn("⚠️ DiscoveryManager недоступен для повторного анонсирования")
-		return
-	}
-
-	dht := c.discovery.GetDHT()
-	if dht == nil {
-		Warn("⚠️ DHT недоступен для повторного анонсирования")
-		return
-	}
-
-	// Декодируем ContentID
-	cid, err := cid.Decode(contentID)
-	if err != nil {
-		Error("❌ Ошибка декодирования ContentID для повторного анонсирования: %v", err)
-		return
-	}
-
-	// Повторяем анонс
-	provideCtx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
-	defer cancel()
-
-	err = dht.Provide(provideCtx, cid, true)
-	if err != nil {
-		Error("❌ Ошибка при повторном анонсировании: %v", err)
-		return
-	}
-
-	// Обновляем время последнего анонса
-	c.mu.Lock()
-	c.lastAnnounceTime = time.Now()
-	c.mu.Unlock()
-
-	Info("✅ Повторное анонсирование успешно завершено")
 }
 
-// StartAggressiveDiscovery запускает агрессивный поиск пиров (как в poc.go)
-func (c *CoreController) StartAggressiveDiscovery(rendezvous string) {
-	if c.discovery == nil {
-		Warn("⚠️ DiscoveryManager недоступен")
-		return
-	}
-	c.discovery.StartAggressiveDiscovery(rendezvous)
+// --- Обработчик сетевых событий ---
+
+// networkNotifee реализует интерфейс network.Notifiee для отслеживания подключений.
+type networkNotifee struct {
+	c *CoreController
 }
 
-// StartAggressiveAdvertising запускает агрессивное анонсирование (как в poc.go)
-func (c *CoreController) StartAggressiveAdvertising(rendezvous string) {
-	if c.discovery == nil {
-		Warn("⚠️ DiscoveryManager недоступен")
-		return
-	}
-	c.discovery.StartAggressiveAdvertising(rendezvous)
+func (c *CoreController) newNetworkNotifee() network.Notifiee {
+	return &networkNotifee{c: c}
 }
 
-// FindPeersOnce выполняет однократный поиск пиров
-func (c *CoreController) FindPeersOnce(rendezvous string) ([]peer.AddrInfo, error) {
-	if c.discovery == nil {
-		return nil, fmt.Errorf("DiscoveryManager недоступен")
-	}
-	return c.discovery.FindPeersOnce(rendezvous)
+func (n *networkNotifee) Connected(net network.Network, conn network.Conn) {
+	peerID := conn.RemotePeer()
+	n.c.mu.Lock()
+	n.c.connectedPeers[peerID] = true
+	n.c.mu.Unlock()
+	n.c.pushEvent("PeerConnected", PeerStatusPayload{PeerID: peerID.String()})
 }
 
-// AdvertiseOnce выполняет однократное анонсирование
-func (c *CoreController) AdvertiseOnce(rendezvous string) error {
-	if c.discovery == nil {
-		return fmt.Errorf("DiscoveryManager недоступен")
-	}
-	return c.discovery.AdvertiseOnce(rendezvous)
+func (n *networkNotifee) Disconnected(net network.Network, conn network.Conn) {
+	peerID := conn.RemotePeer()
+	n.c.mu.Lock()
+	delete(n.c.connectedPeers, peerID)
+	n.c.mu.Unlock()
+	n.c.pushEvent("PeerDisconnected", PeerStatusPayload{PeerID: peerID.String()})
 }
 
-// SetupAutoRelayWithDHT настраивает autorelay с использованием DHT routing table
-func (c *CoreController) SetupAutoRelayWithDHT(kademliaDHT *dht.IpfsDHT) error {
-	if c.node == nil {
-		return fmt.Errorf("Node недоступен")
-	}
-	return c.node.SetupAutoRelayWithDHT(kademliaDHT)
-}
-
-// GetNode возвращает узел для внутреннего использования
-func (c *CoreController) GetNode() *Node {
-	return c.node
-}
+// Пустые реализации остальных методов интерфейса
+func (n *networkNotifee) Listen(net network.Network, ma multiaddr.Multiaddr)      {}
+func (n *networkNotifee) ListenClose(net network.Network, ma multiaddr.Multiaddr) {}
+func (n *networkNotifee) OpenedStream(net network.Network, s network.Stream)      {}
+func (n *networkNotifee) ClosedStream(net network.Network, s network.Stream)      {}
