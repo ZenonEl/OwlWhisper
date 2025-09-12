@@ -76,14 +76,18 @@ func (d *MessageDispatcher) handleContactMessage(senderID string, msg *protocol.
 		d.contactService.RespondToProfileRequest(senderID)
 
 	case *protocol.ContactMessage_ProfileResponse:
+		// Нам прислали ответ с профилем. Передаем его в ContactService.
 		log.Printf("INFO: [Dispatcher] Получен ProfileResponse от %s", senderID)
 		d.contactService.HandleProfileResponse(senderID, typ.ProfileResponse)
 
 	case *protocol.ContactMessage_ContactRequest:
+		// Обрабатываем запрос на добавление в контакты
+		log.Printf("INFO: [Dispatcher] Получен ContactRequest от %s", senderID)
 		d.contactService.HandleContactRequest(senderID, typ.ContactRequest)
 
 	case *protocol.ContactMessage_ContactAccept:
-		// НОВОЕ: Обрабатываем подтверждение дружбы
+		// Обрабатываем подтверждение дружбы
+		log.Printf("INFO: [Dispatcher] Получен ContactAccept от %s", senderID)
 		d.contactService.HandleContactAccept(senderID, typ.ContactAccept)
 	}
 }

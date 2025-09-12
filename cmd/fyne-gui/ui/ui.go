@@ -174,6 +174,12 @@ func (ui *AppUI) eventLoop() {
 			if payload, ok := event.Payload.(newcore.CoreReadyPayload); ok {
 				ui.peerIDLabelText.Set("PeerID: " + payload.PeerID)
 				ui.contactService.UpdateMyProfile(payload.PeerID)
+
+				ui.ShowNicknameDialog(func(nickname string) {
+					ui.contactService.SetMyNickname(nickname)
+					profile := ui.contactService.GetMyProfile()
+					ui.mainWindow.SetTitle(fmt.Sprintf("Owl Whisper - %s", profile.FullAddress()))
+				})
 			}
 
 		case "NewMessage":
@@ -194,9 +200,6 @@ func (ui *AppUI) eventLoop() {
 				ui.statusLabelText.Set(fmt.Sprintf("Статус: Отключен пир %s", payload.PeerID[:8]))
 				ui.contactService.UpdateContactStatus(payload.PeerID, services.StatusOffline)
 			}
-			// case "PeerConnected", "PeerDisconnected":
-			// 	// Обновляем статусы контактов и затем UI
-			// 	ui.contactService.UpdateContactStatuses(ui.coreController.GetConnectedPeers())
 		}
 	}
 }
