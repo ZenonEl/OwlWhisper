@@ -32,6 +32,7 @@ type Contact struct {
 	Nickname      string
 	Discriminator string
 	Status        ContactStatus
+	IsSelf        bool
 }
 
 func (c *Contact) FullAddress() string {
@@ -98,6 +99,7 @@ func NewContactService(core newcore.ICoreController, onUpdate func(), uiManager 
 		Nickname:      "Me",     // Временное имя
 		Discriminator: "xxxxxx", // Временный дискриминатор
 		Status:        StatusOnline,
+		IsSelf:        true,
 	}
 
 	cs := &ContactService{
@@ -107,9 +109,6 @@ func NewContactService(core newcore.ICoreController, onUpdate func(), uiManager 
 		myProfile: myProfile,
 		uiManager: uiManager,
 	}
-
-	// Начинаем анонсировать свой профиль в DHT
-	go cs.announceLoop()
 
 	return cs
 }
@@ -122,11 +121,13 @@ func (cs *ContactService) GetContacts() []*Contact {
 // HandleProfileResponse обрабатывает ответ на наш "пинг".
 func (cs *ContactService) HandleProfileResponse(senderID string, res *protocol.ProfileResponse) {
 	if res.Profile == nil {
+		log.Printf("WARN: [ContactService] Получен пустой ProfileResponse от %s", senderID)
 		return
 	}
 	log.Printf("INFO: [ContactService] Получен профиль от %s. Передаем в UI для подтверждения.", senderID[:8])
 
 	// Вызываем метод интерфейса, реализованный в UI, чтобы показать диалог.
+	// Этот вызов передаст управление в AppUI.OnProfileReceived.
 	cs.uiManager.OnProfileReceived(senderID, res.Profile)
 }
 
@@ -307,6 +308,15 @@ func (cs *ContactService) RespondToProfileRequest(recipientID string) {
 	}
 }
 
+// Этот метод будет вызываться из UI, когда пользователь введет свой ник.
+func (cs *ContactService) SetMyNickname(nickname string) {
+	cs.myProfile.Nickname = nickname
+	log.Printf("INFO: [ContactService] Никнейм установлен: %s", nickname)
+
+	// Проверяем, готов ли наш профиль для анонса
+	cs.checkAndFinalizeProfile()
+}
+
 func (cs *ContactService) UpdateMyProfile(peerID string) {
 	cs.myProfile.PeerID = peerID
 	cs.myProfile.Discriminator = peerID[len(peerID)-6:]
@@ -315,6 +325,22 @@ func (cs *ContactService) UpdateMyProfile(peerID string) {
 	cs.Provider.AddContact(cs.myProfile)
 
 	log.Printf("INFO: [ContactService] Профиль инициализирован: %s", cs.myProfile.FullAddress())
+
+	// Проверяем, готов ли наш профиль для анонса
+	cs.checkAndFinalizeProfile()
+}
+
+// Внутренний метод, который проверяет, есть ли у нас и PeerID, и никнейм.
+// Если да, то он финализирует профиль и запускает анонс.
+func (cs *ContactService) checkAndFinalizeProfile() {
+	if cs.myProfile.PeerID != "загрузка..." && cs.myProfile.Nickname != "..." {
+		// Все данные на месте!
+		// Добавляем себя в список контактов и запускаем анонс.
+		cs.Provider.AddContact(cs.myProfile)
+		cs.onUpdate()
+		go cs.announceLoop() // Запускаем анонс в фоне
+		log.Printf("INFO: [ContactService] Профиль финализирован: %s", cs.myProfile.FullAddress())
+	}
 }
 
 func (cs *ContactService) GetMyProfile() *Contact {
