@@ -14,12 +14,14 @@ import (
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/multiformats/go-multiaddr"
 )
 
 const (
-	// PROTOCOL_ID - уникальный идентификатор нашего чат-протокола.
-	PROTOCOL_ID = "/owl-whisper/1.0.0"
+	// CHAT_PROTOCOL_ID - уникальный идентификатор нашего чат-протокола.
+	CHAT_PROTOCOL_ID = "/owl-whisper/1.0.0"
+	FILE_PROTOCOL_ID = "/owl-whisper/file/1.0.0" // FILE_PROTOCOL_ID
 )
 
 // --- Структуры Событий (Контракт с GUI) ---
@@ -46,6 +48,25 @@ type PeerStatusPayload struct {
 	PeerID string `json:"peer_id"`
 }
 
+// NewIncomingStreamPayload содержит данные для события "NewIncomingStream".
+type NewIncomingStreamPayload struct {
+	StreamID   uint64 `json:"stream_id"`
+	PeerID     string `json:"peer_id"`
+	ProtocolID string `json:"protocol_id"`
+}
+
+// StreamDataReceivedPayload содержит данные для события "StreamDataReceived".
+type StreamDataReceivedPayload struct {
+	StreamID uint64 `json:"stream_id"`
+	Data     []byte `json:"data"`
+}
+
+// StreamClosedPayload содержит данные для события "StreamClosed".
+type StreamClosedPayload struct {
+	StreamID uint64 `json:"stream_id"`
+	PeerID   string `json:"peer_id"`
+}
+
 // --- Интерфейс Контроллера (Публичный API) ---
 
 // ICoreController определяет публичный API для управления P2P-узлом.
@@ -57,6 +78,11 @@ type ICoreController interface {
 	GetConnectedPeers() []string
 	SendDataToPeer(peerID string, data []byte) error
 	BroadcastData(data []byte) error
+
+	OpenStream(peerID string, protocolID string) (uint64, error)
+	WriteToStream(streamID uint64, data []byte) error
+	CloseStream(streamID uint64) error
+
 	FindPeer(peerID string) (*peer.AddrInfo, error)
 	FindProvidersForContent(contentID string) ([]peer.AddrInfo, error)
 	ProvideContent(contentID string) error
@@ -77,6 +103,8 @@ type CoreController struct {
 	eventChan      chan Event
 	connectedPeers map[peer.ID]bool
 	mu             sync.RWMutex
+	streamCounter  uint64                    // Простой счетчик для генерации уникальных ID
+	activeStreams  map[uint64]network.Stream // Хранилище активных стримов
 }
 
 // NewCoreController - конструктор для нашего контроллера.
@@ -89,6 +117,7 @@ func NewCoreController(privKey crypto.PrivKey, cfg Config) (ICoreController, err
 		privKey:        privKey,
 		eventChan:      make(chan Event, 100), // Буферизированный канал
 		connectedPeers: make(map[peer.ID]bool),
+		activeStreams:  make(map[uint64]network.Stream),
 	}, nil
 }
 
@@ -104,7 +133,8 @@ func (c *CoreController) Start() error {
 		PeerID: c.node.Host().ID().String(),
 	})
 	// 2. Регистрируем обработчик входящих потоков
-	c.node.SetStreamHandler(PROTOCOL_ID, c.handleStream)
+	c.node.SetStreamHandler(CHAT_PROTOCOL_ID, c.handleChatMessageStream)
+	c.node.SetStreamHandler(FILE_PROTOCOL_ID, c.handleFileTransferStream)
 	// Регистрируем обработчик сетевых событий для отслеживания подключений
 	c.node.Host().Network().Notify(c.newNetworkNotifee())
 
@@ -155,7 +185,7 @@ func (c *CoreController) SendDataToPeer(peerIDStr string, data []byte) error {
 		return fmt.Errorf("неверный PeerID: %w", err)
 	}
 
-	stream, err := c.node.Host().NewStream(c.ctx, peerID, PROTOCOL_ID)
+	stream, err := c.node.Host().NewStream(c.ctx, peerID, CHAT_PROTOCOL_ID)
 	if err != nil {
 		return fmt.Errorf("не удалось открыть поток: %w", err)
 	}
@@ -245,6 +275,22 @@ func (c *CoreController) Events() <-chan Event {
 
 // handleStream - это наш главный обработчик входящих сообщений.
 func (c *CoreController) handleStream(stream network.Stream) {
+	// ВАЖНО: handleStream теперь должен различать типы стримов.
+	// Если это наш основной чат-протокол, делаем одно.
+	// Если файловый - другое.
+
+	protocolID := stream.Protocol()
+
+	if protocolID == CHAT_PROTOCOL_ID {
+		// Это обычное чат-сообщение
+		c.handleChatMessageStream(stream)
+	} else if protocolID == FILE_PROTOCOL_ID {
+		// Предполагаем, что это файловый стрим
+		c.handleFileTransferStream(stream)
+	}
+}
+
+func (c *CoreController) handleChatMessageStream(stream network.Stream) {
 	defer stream.Close()
 	senderID := stream.Conn().RemotePeer()
 	data, err := io.ReadAll(stream)
@@ -257,6 +303,102 @@ func (c *CoreController) handleStream(stream network.Stream) {
 		SenderID: senderID.String(),
 		Data:     data,
 	})
+}
+
+func (c *CoreController) handleFileTransferStream(stream network.Stream) {
+	// Это новый входящий файловый стрим.
+	c.mu.Lock()
+	c.streamCounter++
+	streamID := c.streamCounter
+	c.activeStreams[streamID] = stream
+	c.mu.Unlock()
+
+	peerID := stream.Conn().RemotePeer()
+
+	// Уведомляем GUI о новом стриме
+	c.pushEvent("NewIncomingStream", NewIncomingStreamPayload{
+		StreamID:   streamID,
+		PeerID:     peerID.String(),
+		ProtocolID: string(stream.Protocol()),
+	})
+
+	// Запускаем горутину, которая будет читать данные из этого стрима
+	go func() {
+		defer func() {
+			// Когда чтение завершено (или оборвалось), закрываем и удаляем стрим
+			c.mu.Lock()
+			delete(c.activeStreams, streamID)
+			c.mu.Unlock()
+			stream.Close()
+			c.pushEvent("StreamClosed", StreamClosedPayload{StreamID: streamID, PeerID: peerID.String()})
+		}()
+
+		// Читаем данные "кусками" и отправляем в GUI
+		buffer := make([]byte, 65536) // 64KB buffer
+		for {
+			n, err := stream.Read(buffer)
+			if err != nil {
+				if err != io.EOF {
+					Error("[Controller] Ошибка чтения из файлового стрима %d: %v", streamID, err)
+				}
+				break
+			}
+			// Отправляем только прочитанные байты
+			c.pushEvent("StreamDataReceived", StreamDataReceivedPayload{
+				StreamID: streamID,
+				Data:     buffer[:n],
+			})
+		}
+	}()
+}
+
+func (c *CoreController) OpenStream(peerIDStr string, protocolID string) (uint64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	peerID, err := peer.Decode(peerIDStr)
+	if err != nil {
+		return 0, fmt.Errorf("неверный PeerID: %w", err)
+	}
+
+	stream, err := c.node.Host().NewStream(c.ctx, peerID, protocol.ID(protocolID))
+	if err != nil {
+		return 0, err
+	}
+
+	// Генерируем новый ID для стрима
+	c.streamCounter++
+	streamID := c.streamCounter
+	c.activeStreams[streamID] = stream
+
+	Info("[Controller] Открыт новый исходящий стрим %d к %s", streamID, peerID.ShortString())
+	return streamID, nil
+}
+
+func (c *CoreController) WriteToStream(streamID uint64, data []byte) error {
+	c.mu.RLock()
+	stream, ok := c.activeStreams[streamID]
+	c.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("стрим с ID %d не найден или уже закрыт", streamID)
+	}
+
+	_, err := stream.Write(data)
+	return err
+}
+
+func (c *CoreController) CloseStream(streamID uint64) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	stream, ok := c.activeStreams[streamID]
+	if !ok {
+		return fmt.Errorf("стрим с ID %d не найден", streamID)
+	}
+
+	delete(c.activeStreams, streamID) // Удаляем из нашего хранилища
+	return stream.Close()
 }
 
 // onPeerFound - колбэк, который вызывается DiscoveryManager'ом.
