@@ -83,41 +83,35 @@ type TransferState struct {
 type FileService struct {
 	core           newcore.ICoreController
 	contactService *ContactService
+	chatService    *ChatService
 
 	// Хранилище активных и завершенных передач
 	transfers map[string]*TransferState
 	mu        sync.RWMutex
-
-	onUpdate              func(transferID string)        // Callback для обновления UI
-	onNewFileAnnouncement func(widget fyne.CanvasObject) // Принимает готовый виджет
 }
 
-func NewFileService(core newcore.ICoreController, cs *ContactService, onNewFile func(fyne.CanvasObject)) *FileService {
+func NewFileService(core newcore.ICoreController, cs *ContactService) *FileService {
 	return &FileService{
-		core:                  core,
-		contactService:        cs,
-		transfers:             make(map[string]*TransferState),
-		onNewFileAnnouncement: onNewFile,
+		core:           core,
+		contactService: cs,
+		transfers:      make(map[string]*TransferState),
 	}
 }
 
 // AnnounceFile (Фаза 1: Анонс) - вызывается из UI, когда пользователь выбирает файл.
-func (fs *FileService) AnnounceFile(recipientID, filePath string) error {
+func (fs *FileService) AnnounceFile(recipientID, filePath string) (*FileCard, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
-		return fmt.Errorf("не удалось открыть файл: %w", err)
 	}
 	defer file.Close()
 
 	stat, err := file.Stat()
 	if err != nil {
-		return fmt.Errorf("не удалось получить информацию о файле: %w", err)
 	}
 
 	// Вычисляем хеш
 	hasher := sha256.New()
 	if _, err := io.Copy(hasher, file); err != nil {
-		return fmt.Errorf("не удалось вычислить хеш: %w", err)
 	}
 	fileHash := fmt.Sprintf("%x", hasher.Sum(nil))
 
@@ -157,11 +151,21 @@ func (fs *FileService) AnnounceFile(recipientID, filePath string) error {
 
 	data, err := proto.Marshal(envelope)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
+	// ИЗМЕНЕНИЕ: Не вызываем chatService, а создаем и возвращаем виджет
+	fileCard := NewFileCard(metadata, func(m *protocol.FileMetadata) {
+		// Кнопка "Скачать" для отправленных файлов может ничего не делать
+	})
+
 	log.Printf("INFO: [FileService] Анонсируем файл %s пиру %s", metadata.Filename, recipientID[:8])
-	return fs.core.SendDataToPeer(recipientID, data)
+	err = fs.core.SendDataToPeer(recipientID, data) // Переопределяем err
+	if err != nil {
+		return nil, err
+	}
+
+	return fileCard, nil
 }
 
 // HandleDownloadRequest (Фаза 4: Раздача) - вызывается из Dispatcher'а.
@@ -189,7 +193,6 @@ func (fs *FileService) HandleDownloadRequest(req *protocol.FileDownloadRequest, 
 
 		state.StreamID = streamID
 		state.Status = "transferring"
-		fs.onUpdate(state.TransferID)
 
 		// 2. Открываем файл для чтения
 		file, err := os.Open(state.FilePath)
@@ -219,20 +222,14 @@ func (fs *FileService) HandleDownloadRequest(req *protocol.FileDownloadRequest, 
 		// 4. Закрываем стрим, когда все отправлено
 		fs.core.CloseStream(streamID)
 		state.Status = "completed"
-		fs.onUpdate(state.TransferID)
 		log.Printf("INFO: [FileService] Передача файла %s завершена.", state.Metadata.Filename)
 	}()
 }
 
 // HandleFileAnnouncement (Фаза 2: Получение анонса) - вызывается из Dispatcher'а.
-func (fs *FileService) HandleFileAnnouncement(senderID string, metadata *protocol.FileMetadata) {
+func (fs *FileService) HandleFileAnnouncement(senderID string, metadata *protocol.FileMetadata) (*FileCard, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
-
-	// Проверяем, не получали ли мы уже анонс этого файла
-	if _, ok := fs.transfers[metadata.TransferId]; ok {
-		return // Уже знаем об этой передаче
-	}
 
 	// Сохраняем состояние передачи. Мы - получатель.
 	state := &TransferState{
@@ -255,7 +252,7 @@ func (fs *FileService) HandleFileAnnouncement(senderID string, metadata *protoco
 		go fs.RequestFileDownload(m, senderID)
 	})
 	// 2. Вызываем callback, чтобы передать ГОТОВЫЙ ВИДЖЕТ в UI
-	fs.onNewFileAnnouncement(fileCard)
+	return fileCard, nil
 }
 
 // RequestFileDownload (Фаза 3: Инициация скачивания) - вызывается из UI.
@@ -263,19 +260,14 @@ func (fs *FileService) HandleFileAnnouncement(senderID string, metadata *protoco
 func (fs *FileService) RequestFileDownload(metadata *protocol.FileMetadata, senderID string) {
 	log.Printf("INFO: [FileService] Запрашиваем скачивание файла %s от %s", metadata.Filename, senderID[:8])
 
-	// 1. Создаем сам запрос
 	req := &protocol.FileDownloadRequest{
 		TransferId: metadata.TransferId,
 	}
-
-	// 2. Оборачиваем его в ChatMessage, так как это событие чата
 	chatMsg := &protocol.ChatMessage{
 		ChatType: protocol.ChatMessage_PRIVATE,
 		ChatId:   senderID,
-		Content:  &protocol.ChatMessage_FileRequest{FileRequest: req}, // <-- ИСПОЛЬЗУЕМ ПРАВИЛЬНЫЙ ТИП
+		Content:  &protocol.ChatMessage_FileRequest{FileRequest: req},
 	}
-
-	// 3. Оборачиваем ChatMessage в Envelope
 	envelope := &protocol.Envelope{
 		MessageId:     uuid.New().String(),
 		SenderId:      fs.core.GetMyPeerID(),
@@ -289,6 +281,13 @@ func (fs *FileService) RequestFileDownload(metadata *protocol.FileMetadata, send
 		return
 	}
 
+	// Обновляем статус у себя
+	fs.mu.Lock()
+	if state, ok := fs.transfers[metadata.TransferId]; ok {
+		state.Status = "downloading"
+	}
+	fs.mu.Unlock()
+
 	if err := fs.core.SendDataToPeer(senderID, data); err != nil {
 		log.Printf("ERROR: [FileService] Не удалось отправить DownloadRequest: %v", err)
 	}
@@ -296,10 +295,63 @@ func (fs *FileService) RequestFileDownload(metadata *protocol.FileMetadata, send
 
 // HandleIncomingStream - вызывается из Core, когда к нам открыли файловый стрим.
 func (fs *FileService) HandleIncomingStream(payload newcore.NewIncomingStreamPayload) {
-	// ... (здесь будет логика связывания streamID с transferID) ...
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	// Нам нужно найти, к какой передаче относится этот стрим.
+	// Пока что будем делать это простым перебором (не очень эффективно, но для MVP сойдет).
+	var targetState *TransferState
+	for _, state := range fs.transfers {
+		if state.IsIncoming && state.Metadata.Filename != "" { // Ищем активную входящую передачу
+			targetState = state
+			break
+		}
+	}
+
+	if targetState == nil {
+		log.Printf("WARN: [FileService] Получен входящий стрим, но для него нет активной передачи.")
+		fs.core.CloseStream(payload.StreamID) // Закрываем ненужный стрим
+		return
+	}
+
+	targetState.StreamID = payload.StreamID
+	log.Printf("INFO: [FileService] Входящий стрим %d связан с передачей файла %s", payload.StreamID, targetState.Metadata.Filename)
 }
 
 // HandleStreamData - вызывается из Core, когда пришли "куски" файла.
 func (fs *FileService) HandleStreamData(payload newcore.StreamDataReceivedPayload) {
-	// ... (здесь будет логика записи байтов на диск и обновления прогресс-бара) ...
+	fs.mu.RLock()
+	state, ok := fs.findTransferByStreamID(payload.StreamID)
+	fs.mu.RUnlock()
+
+	if !ok {
+		log.Printf("WARN: [FileService] Получены данные для неизвестного стрима %d", payload.StreamID)
+		return
+	}
+
+	// Открываем файл для дозаписи (или создаем, если его нет)
+	// TODO: Путь к файлу должен быть безопасным (например, папка Downloads)
+	f, err := os.OpenFile(state.Metadata.Filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Printf("ERROR: [FileService] Не удалось открыть файл для записи: %v", err)
+		return
+	}
+	defer f.Close()
+
+	if _, err := f.Write(payload.Data); err != nil {
+		log.Printf("ERROR: [FileService] Не удалось записать данные в файл: %v", err)
+		return
+	}
+
+	// TODO: Обновлять прогресс-бар
+	log.Printf("INFO: [FileService] Записано %d байт в файл %s", len(payload.Data), state.Metadata.Filename)
+}
+
+func (fs *FileService) findTransferByStreamID(streamID uint64) (*TransferState, bool) {
+	for _, state := range fs.transfers {
+		if state.StreamID == streamID {
+			return state, true
+		}
+	}
+	return nil, false
 }

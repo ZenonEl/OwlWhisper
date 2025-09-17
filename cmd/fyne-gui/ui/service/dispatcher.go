@@ -63,7 +63,11 @@ func (d *MessageDispatcher) handleChatMessage(senderID string, msg *protocol.Cha
 
 	case *protocol.ChatMessage_FileAnnouncement:
 		log.Printf("INFO: [Dispatcher] Получен анонс файла от %s", senderID)
-		d.fileService.HandleFileAnnouncement(senderID, content.FileAnnouncement)
+
+		card, err := d.fileService.HandleFileAnnouncement(senderID, content.FileAnnouncement)
+		if err == nil && card != nil {
+			d.chatService.ProcessWidgetMessage(card)
+		}
 
 	// --- НОВЫЕ КЕЙСЫ ---
 	case *protocol.ChatMessage_FileRequest:

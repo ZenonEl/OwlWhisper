@@ -51,6 +51,10 @@ func (cs *ChatService) ProcessTextMessage(senderID string, msg *protocol.TextMes
 	// TODO: Сохранение в БД
 }
 
+func (cs *ChatService) ProcessWidgetMessage(widget fyne.CanvasObject) {
+	cs.onNewMessageUI(widget)
+}
+
 // SendTextMessage создает, сериализует и отправляет текстовое сообщение.
 func (cs *ChatService) SendTextMessage(recipientID string, text string) error {
 	// 1. Получаем ID отправителя. Нам нужен полный PeerID, а не "Me".

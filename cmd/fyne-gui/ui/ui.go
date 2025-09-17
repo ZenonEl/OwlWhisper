@@ -65,10 +65,10 @@ func NewAppUI(core newcore.ICoreController) *AppUI {
 		// Callback для добавления нового сообщения в UI
 		ui.messages.Append(newWidget)
 	})
-	ui.fileService = services.NewFileService(core, ui.contactService, func(newWidget fyne.CanvasObject) {
-		// Callback для добавления нового анонса файла в UI
-		ui.messages.Append(newWidget)
-	})
+	// 3. Создаем FileService. Ему больше не нужен callback.
+	ui.fileService = services.NewFileService(core, ui.contactService)
+
+	// 4. Создаем Диспетчер, передавая ему все три сервиса
 	ui.dispatcher = services.NewMessageDispatcher(ui.contactService, ui.chatService, ui.fileService)
 
 	// 3. И ТОЛЬКО ТЕПЕРЬ, когда все сервисы готовы, мы создаем UI,
@@ -134,20 +134,21 @@ func (ui *AppUI) buildUI() fyne.CanvasObject {
 	})
 	leftPanel := container.NewBorder(container.NewVBox(widget.NewLabel("Контакты:"), addContactButton), nil, nil, nil, contactsList)
 
-	chatMessages := widget.NewListWithData(ui.messages,
+	chatMessages := widget.NewListWithData(
+		ui.messages,
+		// Этот контейнер будет "хостом" для наших виджетов
 		func() fyne.CanvasObject {
-			// Создаем "контейнер" для любого типа сообщения
-			return container.NewMax()
+			return container.NewStack()
 		},
+		// Эта функция будет класть нужный виджет в контейнер
 		func(item binding.DataItem, o fyne.CanvasObject) {
 			untyped, _ := item.(binding.Untyped).Get()
-			// В зависимости от типа данных, кладем в контейнер нужный виджет
-			if card, ok := untyped.(*FileCard); ok {
-				o.(*fyne.Container).Objects = []fyne.CanvasObject{card}
-			} else if label, ok := untyped.(*widget.Label); ok {
-				o.(*fyne.Container).Objects = []fyne.CanvasObject{label}
+
+			// ПРОВЕРЯЕМ ТИП: Если это виджет, используем его.
+			if wid, ok := untyped.(fyne.CanvasObject); ok {
+				o.(*fyne.Container).Objects = []fyne.CanvasObject{wid}
+				o.(*fyne.Container).Refresh()
 			}
-			o.(*fyne.Container).Refresh()
 		},
 	)
 
@@ -194,10 +195,16 @@ func (ui *AppUI) buildUI() fyne.CanvasObject {
 
 			// 3. Вызываем метод FileService для анонса в фоновой горутине
 			go func() {
-				err := ui.fileService.AnnounceFile(ui.currentChatPeerID, filePath)
-				if err != nil {
-					// Безопасно обновляем UI в случае ошибки
-					ui.statusLabelText.Set(fmt.Sprintf("Ошибка анонса файла: %v", err))
+				// ИЗМЕНЕНО: AnnounceFile теперь возвращает виджет
+				card, announceErr := ui.fileService.AnnounceFile(ui.currentChatPeerID, filePath)
+				if announceErr != nil {
+					// TODO: Показать ошибку в UI
+					log.Printf("ERROR: [UI] Ошибка анонса файла: %v", announceErr)
+					return
+				}
+				if card != nil {
+					// Добавляем СВОЙ виджет в СВОЙ чат
+					ui.messages.Append(card)
 				}
 			}()
 
@@ -245,6 +252,17 @@ func (ui *AppUI) eventLoop() {
 				ui.statusLabelText.Set(fmt.Sprintf("Статус: Отключен пир %s", payload.PeerID[:8]))
 				ui.contactService.UpdateContactStatus(payload.PeerID, services.StatusOffline)
 			}
+		case "NewIncomingStream":
+			if payload, ok := event.Payload.(newcore.NewIncomingStreamPayload); ok {
+				ui.fileService.HandleIncomingStream(payload)
+			}
+		case "StreamDataReceived":
+			if payload, ok := event.Payload.(newcore.StreamDataReceivedPayload); ok {
+				ui.fileService.HandleStreamData(payload)
+			}
+		case "StreamClosed":
+			// TODO: Обработать завершение передачи (проверить хеш)
+			// ...
 		}
 	}
 }
