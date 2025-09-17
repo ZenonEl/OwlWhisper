@@ -14,6 +14,7 @@ import (
 type MessageDispatcher struct {
 	contactService *ContactService
 	chatService    *ChatService
+	fileService    *FileService
 }
 
 type AppUIProvider interface {
@@ -21,10 +22,11 @@ type AppUIProvider interface {
 	// В будущем здесь будут другие методы, например, OnContactRequestReceived
 }
 
-func NewMessageDispatcher(cs *ContactService, chs *ChatService) *MessageDispatcher {
+func NewMessageDispatcher(cs *ContactService, chs *ChatService, fs *FileService) *MessageDispatcher {
 	return &MessageDispatcher{
 		contactService: cs,
 		chatService:    chs,
+		fileService:    fs,
 	}
 }
 
@@ -59,11 +61,20 @@ func (d *MessageDispatcher) handleChatMessage(senderID string, msg *protocol.Cha
 	case *protocol.ChatMessage_Text:
 		d.chatService.ProcessTextMessage(senderID, content.Text)
 
-	case *protocol.ChatMessage_File:
-		// TODO: Логика обработки файлов
+	case *protocol.ChatMessage_FileAnnouncement:
+		log.Printf("INFO: [Dispatcher] Получен анонс файла от %s", senderID)
+		d.fileService.HandleFileAnnouncement(senderID, content.FileAnnouncement)
+
+	// --- НОВЫЕ КЕЙСЫ ---
+	case *protocol.ChatMessage_FileRequest:
+		log.Printf("INFO: [Dispatcher] Получен запрос на скачивание файла от %s", senderID)
+		d.fileService.HandleDownloadRequest(content.FileRequest, senderID)
+
+	case *protocol.ChatMessage_FileStatus:
+		// TODO: Обработка статусов (файл недоступен и т.д.)
 
 	case *protocol.ChatMessage_ReadReceipts:
-		// TODO: Логика обработки статусов прочтения
+		// TODO: Обработка статусов прочтения
 	}
 }
 

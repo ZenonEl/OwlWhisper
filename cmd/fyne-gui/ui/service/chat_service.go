@@ -10,6 +10,8 @@ import (
 	newcore "OwlWhisper/cmd/fyne-gui/new-core"
 	protocol "OwlWhisper/cmd/fyne-gui/new-core/protocol"
 
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/widget"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
 )
@@ -17,11 +19,11 @@ import (
 // ChatService управляет бизнес-логикой, связанной с чатами.
 type ChatService struct {
 	core            newcore.ICoreController
-	contactProvider ContactProvider               // Нужен для получения никнеймов
-	onNewMessageUI  func(formattedMessage string) // Callback для обновления UI
+	contactProvider ContactProvider                // Нужен для получения никнеймов
+	onNewMessageUI  func(widget fyne.CanvasObject) // Принимает готовый виджет// Callback для обновления UI
 }
 
-func NewChatService(core newcore.ICoreController, contactProvider ContactProvider, onNewMessageUI func(string)) *ChatService {
+func NewChatService(core newcore.ICoreController, contactProvider ContactProvider, onNewMessageUI func(fyne.CanvasObject)) *ChatService {
 	return &ChatService{
 		core:            core,
 		contactProvider: contactProvider,
@@ -32,17 +34,21 @@ func NewChatService(core newcore.ICoreController, contactProvider ContactProvide
 // ProcessTextMessage обрабатывает входящее текстовое сообщение.
 func (cs *ChatService) ProcessTextMessage(senderID string, msg *protocol.TextMessage) {
 	sender, ok := cs.contactProvider.GetContactByPeerID(senderID)
-	senderName := senderID[:8] // Имя по умолчанию - короткий PeerID
+	senderName := senderID[:8]
 	if ok {
-		senderName = sender.Nickname // Если контакт известен, используем никнейм
+		senderName = sender.Nickname
 	}
 
-	formattedMessage := fmt.Sprintf("[%s]: %s", senderName, msg.Body)
+	fullMessage := fmt.Sprintf("[%s]: %s", senderName, msg.Body)
 
-	// Вызываем callback, чтобы передать готовую строку в UI
-	cs.onNewMessageUI(formattedMessage)
+	// 1. Создаем текстовый виджет
+	textWidget := widget.NewLabel(fullMessage)
+	textWidget.Wrapping = fyne.TextWrapWord // Включаем перенос слов
 
-	// TODO: В будущем здесь будет логика сохранения сообщения в БД.
+	// 2. Вызываем callback, чтобы передать ГОТОВЫЙ ВИДЖЕТ в UI
+	cs.onNewMessageUI(textWidget)
+
+	// TODO: Сохранение в БД
 }
 
 // SendTextMessage создает, сериализует и отправляет текстовое сообщение.
