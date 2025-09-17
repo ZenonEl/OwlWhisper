@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.8
 // 	protoc        v6.32.0
-// source: cmd/fyne-gui/new-core/protocol/chat.proto
+// source: chat.proto
 
 package __
 
@@ -51,11 +51,11 @@ func (x ChatMessage_ChatType) String() string {
 }
 
 func (ChatMessage_ChatType) Descriptor() protoreflect.EnumDescriptor {
-	return file_cmd_fyne_gui_new_core_protocol_chat_proto_enumTypes[0].Descriptor()
+	return file_chat_proto_enumTypes[0].Descriptor()
 }
 
 func (ChatMessage_ChatType) Type() protoreflect.EnumType {
-	return &file_cmd_fyne_gui_new_core_protocol_chat_proto_enumTypes[0]
+	return &file_chat_proto_enumTypes[0]
 }
 
 func (x ChatMessage_ChatType) Number() protoreflect.EnumNumber {
@@ -64,7 +64,7 @@ func (x ChatMessage_ChatType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ChatMessage_ChatType.Descriptor instead.
 func (ChatMessage_ChatType) EnumDescriptor() ([]byte, []int) {
-	return file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescGZIP(), []int{1, 0}
+	return file_chat_proto_rawDescGZIP(), []int{1, 0}
 }
 
 // Envelope - это "конверт", в который заворачивается каждое
@@ -89,7 +89,7 @@ type Envelope struct {
 
 func (x *Envelope) Reset() {
 	*x = Envelope{}
-	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[0]
+	mi := &file_chat_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -101,7 +101,7 @@ func (x *Envelope) String() string {
 func (*Envelope) ProtoMessage() {}
 
 func (x *Envelope) ProtoReflect() protoreflect.Message {
-	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[0]
+	mi := &file_chat_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -114,7 +114,7 @@ func (x *Envelope) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Envelope.ProtoReflect.Descriptor instead.
 func (*Envelope) Descriptor() ([]byte, []int) {
-	return file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescGZIP(), []int{0}
+	return file_chat_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *Envelope) GetMessageId() string {
@@ -186,7 +186,7 @@ type ChatMessage struct {
 	// Types that are valid to be assigned to Content:
 	//
 	//	*ChatMessage_Text
-	//	*ChatMessage_File
+	//	*ChatMessage_FileAnnouncement
 	//	*ChatMessage_ReadReceipts
 	Content       isChatMessage_Content `protobuf_oneof:"content"`
 	unknownFields protoimpl.UnknownFields
@@ -195,7 +195,7 @@ type ChatMessage struct {
 
 func (x *ChatMessage) Reset() {
 	*x = ChatMessage{}
-	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[1]
+	mi := &file_chat_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -207,7 +207,7 @@ func (x *ChatMessage) String() string {
 func (*ChatMessage) ProtoMessage() {}
 
 func (x *ChatMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[1]
+	mi := &file_chat_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -220,7 +220,7 @@ func (x *ChatMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChatMessage.ProtoReflect.Descriptor instead.
 func (*ChatMessage) Descriptor() ([]byte, []int) {
-	return file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescGZIP(), []int{1}
+	return file_chat_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *ChatMessage) GetChatType() ChatMessage_ChatType {
@@ -253,10 +253,10 @@ func (x *ChatMessage) GetText() *TextMessage {
 	return nil
 }
 
-func (x *ChatMessage) GetFile() *FileMetadata {
+func (x *ChatMessage) GetFileAnnouncement() *FileMetadata {
 	if x != nil {
-		if x, ok := x.Content.(*ChatMessage_File); ok {
-			return x.File
+		if x, ok := x.Content.(*ChatMessage_FileAnnouncement); ok {
+			return x.FileAnnouncement
 		}
 	}
 	return nil
@@ -279,8 +279,8 @@ type ChatMessage_Text struct {
 	Text *TextMessage `protobuf:"bytes,3,opt,name=text,proto3,oneof"` // Текстовое сообщение
 }
 
-type ChatMessage_File struct {
-	File *FileMetadata `protobuf:"bytes,4,opt,name=file,proto3,oneof"` // Метаданные файла
+type ChatMessage_FileAnnouncement struct {
+	FileAnnouncement *FileMetadata `protobuf:"bytes,4,opt,name=file_announcement,json=fileAnnouncement,proto3,oneof"` // Метаданные файла
 }
 
 type ChatMessage_ReadReceipts struct {
@@ -289,7 +289,7 @@ type ChatMessage_ReadReceipts struct {
 
 func (*ChatMessage_Text) isChatMessage_Content() {}
 
-func (*ChatMessage_File) isChatMessage_Content() {}
+func (*ChatMessage_FileAnnouncement) isChatMessage_Content() {}
 
 func (*ChatMessage_ReadReceipts) isChatMessage_Content() {}
 
@@ -303,7 +303,7 @@ type TextMessage struct {
 
 func (x *TextMessage) Reset() {
 	*x = TextMessage{}
-	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[2]
+	mi := &file_chat_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -315,7 +315,7 @@ func (x *TextMessage) String() string {
 func (*TextMessage) ProtoMessage() {}
 
 func (x *TextMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[2]
+	mi := &file_chat_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -328,7 +328,7 @@ func (x *TextMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TextMessage.ProtoReflect.Descriptor instead.
 func (*TextMessage) Descriptor() ([]byte, []int) {
-	return file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescGZIP(), []int{2}
+	return file_chat_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *TextMessage) GetBody() string {
@@ -345,74 +345,6 @@ func (x *TextMessage) GetReplyToMessageId() string {
 	return ""
 }
 
-type FileMetadata struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Filename      string                 `protobuf:"bytes,1,opt,name=filename,proto3" json:"filename,omitempty"`
-	SizeBytes     int64                  `protobuf:"varint,2,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
-	MimeType      string                 `protobuf:"bytes,3,opt,name=mime_type,json=mimeType,proto3" json:"mime_type,omitempty"`
-	HashSha256    string                 `protobuf:"bytes,4,opt,name=hash_sha256,json=hashSha256,proto3" json:"hash_sha256,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *FileMetadata) Reset() {
-	*x = FileMetadata{}
-	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[3]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *FileMetadata) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*FileMetadata) ProtoMessage() {}
-
-func (x *FileMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[3]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use FileMetadata.ProtoReflect.Descriptor instead.
-func (*FileMetadata) Descriptor() ([]byte, []int) {
-	return file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescGZIP(), []int{3}
-}
-
-func (x *FileMetadata) GetFilename() string {
-	if x != nil {
-		return x.Filename
-	}
-	return ""
-}
-
-func (x *FileMetadata) GetSizeBytes() int64 {
-	if x != nil {
-		return x.SizeBytes
-	}
-	return 0
-}
-
-func (x *FileMetadata) GetMimeType() string {
-	if x != nil {
-		return x.MimeType
-	}
-	return ""
-}
-
-func (x *FileMetadata) GetHashSha256() string {
-	if x != nil {
-		return x.HashSha256
-	}
-	return ""
-}
-
 type ReadReceipts struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	MessageIds    []string               `protobuf:"bytes,1,rep,name=message_ids,json=messageIds,proto3" json:"message_ids,omitempty"` // ID прочитанных сообщений
@@ -422,7 +354,7 @@ type ReadReceipts struct {
 
 func (x *ReadReceipts) Reset() {
 	*x = ReadReceipts{}
-	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[4]
+	mi := &file_chat_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -434,7 +366,7 @@ func (x *ReadReceipts) String() string {
 func (*ReadReceipts) ProtoMessage() {}
 
 func (x *ReadReceipts) ProtoReflect() protoreflect.Message {
-	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[4]
+	mi := &file_chat_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -447,7 +379,7 @@ func (x *ReadReceipts) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadReceipts.ProtoReflect.Descriptor instead.
 func (*ReadReceipts) Descriptor() ([]byte, []int) {
-	return file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescGZIP(), []int{4}
+	return file_chat_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ReadReceipts) GetMessageIds() []string {
@@ -474,7 +406,7 @@ type ContactMessage struct {
 
 func (x *ContactMessage) Reset() {
 	*x = ContactMessage{}
-	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[5]
+	mi := &file_chat_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -486,7 +418,7 @@ func (x *ContactMessage) String() string {
 func (*ContactMessage) ProtoMessage() {}
 
 func (x *ContactMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[5]
+	mi := &file_chat_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -499,7 +431,7 @@ func (x *ContactMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ContactMessage.ProtoReflect.Descriptor instead.
 func (*ContactMessage) Descriptor() ([]byte, []int) {
-	return file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescGZIP(), []int{5}
+	return file_chat_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ContactMessage) GetType() isContactMessage_Type {
@@ -587,7 +519,7 @@ type ProfileInfo struct {
 
 func (x *ProfileInfo) Reset() {
 	*x = ProfileInfo{}
-	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[6]
+	mi := &file_chat_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -599,7 +531,7 @@ func (x *ProfileInfo) String() string {
 func (*ProfileInfo) ProtoMessage() {}
 
 func (x *ProfileInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[6]
+	mi := &file_chat_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -612,7 +544,7 @@ func (x *ProfileInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProfileInfo.ProtoReflect.Descriptor instead.
 func (*ProfileInfo) Descriptor() ([]byte, []int) {
-	return file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescGZIP(), []int{6}
+	return file_chat_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ProfileInfo) GetNickname() string {
@@ -659,7 +591,7 @@ type ProfileRequest struct {
 
 func (x *ProfileRequest) Reset() {
 	*x = ProfileRequest{}
-	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[7]
+	mi := &file_chat_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -671,7 +603,7 @@ func (x *ProfileRequest) String() string {
 func (*ProfileRequest) ProtoMessage() {}
 
 func (x *ProfileRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[7]
+	mi := &file_chat_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -684,7 +616,7 @@ func (x *ProfileRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProfileRequest.ProtoReflect.Descriptor instead.
 func (*ProfileRequest) Descriptor() ([]byte, []int) {
-	return file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescGZIP(), []int{7}
+	return file_chat_proto_rawDescGZIP(), []int{6}
 }
 
 // "Понг": ответ с профилем.
@@ -697,7 +629,7 @@ type ProfileResponse struct {
 
 func (x *ProfileResponse) Reset() {
 	*x = ProfileResponse{}
-	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[8]
+	mi := &file_chat_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -709,7 +641,7 @@ func (x *ProfileResponse) String() string {
 func (*ProfileResponse) ProtoMessage() {}
 
 func (x *ProfileResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[8]
+	mi := &file_chat_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -722,7 +654,7 @@ func (x *ProfileResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProfileResponse.ProtoReflect.Descriptor instead.
 func (*ProfileResponse) Descriptor() ([]byte, []int) {
-	return file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescGZIP(), []int{8}
+	return file_chat_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ProfileResponse) GetProfile() *ProfileInfo {
@@ -743,7 +675,7 @@ type ContactRequest struct {
 
 func (x *ContactRequest) Reset() {
 	*x = ContactRequest{}
-	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[9]
+	mi := &file_chat_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -755,7 +687,7 @@ func (x *ContactRequest) String() string {
 func (*ContactRequest) ProtoMessage() {}
 
 func (x *ContactRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[9]
+	mi := &file_chat_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -768,7 +700,7 @@ func (x *ContactRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ContactRequest.ProtoReflect.Descriptor instead.
 func (*ContactRequest) Descriptor() ([]byte, []int) {
-	return file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescGZIP(), []int{9}
+	return file_chat_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ContactRequest) GetSenderProfile() *ProfileInfo {
@@ -789,7 +721,7 @@ type ContactAccept struct {
 
 func (x *ContactAccept) Reset() {
 	*x = ContactAccept{}
-	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[10]
+	mi := &file_chat_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -801,7 +733,7 @@ func (x *ContactAccept) String() string {
 func (*ContactAccept) ProtoMessage() {}
 
 func (x *ContactAccept) ProtoReflect() protoreflect.Message {
-	mi := &file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[10]
+	mi := &file_chat_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -814,7 +746,7 @@ func (x *ContactAccept) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ContactAccept.ProtoReflect.Descriptor instead.
 func (*ContactAccept) Descriptor() ([]byte, []int) {
-	return file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescGZIP(), []int{10}
+	return file_chat_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ContactAccept) GetSenderProfile() *ProfileInfo {
@@ -824,11 +756,12 @@ func (x *ContactAccept) GetSenderProfile() *ProfileInfo {
 	return nil
 }
 
-var File_cmd_fyne_gui_new_core_protocol_chat_proto protoreflect.FileDescriptor
+var File_chat_proto protoreflect.FileDescriptor
 
-const file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDesc = "" +
+const file_chat_proto_rawDesc = "" +
 	"\n" +
-	")cmd/fyne-gui/new-core/protocol/chat.proto\x12\bprotocol\"\xf9\x01\n" +
+	"\n" +
+	"chat.proto\x12\bprotocol\x1a\x13file_transfer.proto\"\xf9\x01\n" +
 	"\bEnvelope\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1b\n" +
@@ -836,12 +769,12 @@ const file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDesc = "" +
 	"\x0etimestamp_unix\x18\x03 \x01(\x03R\rtimestampUnix\x12:\n" +
 	"\fchat_message\x18\x04 \x01(\v2\x15.protocol.ChatMessageH\x00R\vchatMessage\x12C\n" +
 	"\x0fcontact_message\x18\x05 \x01(\v2\x18.protocol.ContactMessageH\x00R\x0econtactMessageB\t\n" +
-	"\apayload\"\xac\x02\n" +
+	"\apayload\"\xc5\x02\n" +
 	"\vChatMessage\x12;\n" +
 	"\tchat_type\x18\x01 \x01(\x0e2\x1e.protocol.ChatMessage.ChatTypeR\bchatType\x12\x17\n" +
 	"\achat_id\x18\x02 \x01(\tR\x06chatId\x12+\n" +
-	"\x04text\x18\x03 \x01(\v2\x15.protocol.TextMessageH\x00R\x04text\x12,\n" +
-	"\x04file\x18\x04 \x01(\v2\x16.protocol.FileMetadataH\x00R\x04file\x12=\n" +
+	"\x04text\x18\x03 \x01(\v2\x15.protocol.TextMessageH\x00R\x04text\x12E\n" +
+	"\x11file_announcement\x18\x04 \x01(\v2\x16.protocol.FileMetadataH\x00R\x10fileAnnouncement\x12=\n" +
 	"\rread_receipts\x18\x05 \x01(\v2\x16.protocol.ReadReceiptsH\x00R\freadReceipts\"\"\n" +
 	"\bChatType\x12\v\n" +
 	"\aPRIVATE\x10\x00\x12\t\n" +
@@ -849,14 +782,7 @@ const file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDesc = "" +
 	"\acontent\"P\n" +
 	"\vTextMessage\x12\x12\n" +
 	"\x04body\x18\x01 \x01(\tR\x04body\x12-\n" +
-	"\x13reply_to_message_id\x18\x02 \x01(\tR\x10replyToMessageId\"\x87\x01\n" +
-	"\fFileMetadata\x12\x1a\n" +
-	"\bfilename\x18\x01 \x01(\tR\bfilename\x12\x1d\n" +
-	"\n" +
-	"size_bytes\x18\x02 \x01(\x03R\tsizeBytes\x12\x1b\n" +
-	"\tmime_type\x18\x03 \x01(\tR\bmimeType\x12\x1f\n" +
-	"\vhash_sha256\x18\x04 \x01(\tR\n" +
-	"hashSha256\"/\n" +
+	"\x13reply_to_message_id\x18\x02 \x01(\tR\x10replyToMessageId\"/\n" +
 	"\fReadReceipts\x12\x1f\n" +
 	"\vmessage_ids\x18\x01 \x03(\tR\n" +
 	"messageIds\"\xac\x02\n" +
@@ -885,49 +811,49 @@ const file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDesc = "" +
 	"\x0esender_profile\x18\x01 \x01(\v2\x15.protocol.ProfileInfoR\rsenderProfileB\x04Z\x02./b\x06proto3"
 
 var (
-	file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescOnce sync.Once
-	file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescData []byte
+	file_chat_proto_rawDescOnce sync.Once
+	file_chat_proto_rawDescData []byte
 )
 
-func file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescGZIP() []byte {
-	file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescOnce.Do(func() {
-		file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDesc), len(file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDesc)))
+func file_chat_proto_rawDescGZIP() []byte {
+	file_chat_proto_rawDescOnce.Do(func() {
+		file_chat_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_chat_proto_rawDesc), len(file_chat_proto_rawDesc)))
 	})
-	return file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDescData
+	return file_chat_proto_rawDescData
 }
 
-var file_cmd_fyne_gui_new_core_protocol_chat_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
-var file_cmd_fyne_gui_new_core_protocol_chat_proto_goTypes = []any{
+var file_chat_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_chat_proto_goTypes = []any{
 	(ChatMessage_ChatType)(0), // 0: protocol.ChatMessage.ChatType
 	(*Envelope)(nil),          // 1: protocol.Envelope
 	(*ChatMessage)(nil),       // 2: protocol.ChatMessage
 	(*TextMessage)(nil),       // 3: protocol.TextMessage
-	(*FileMetadata)(nil),      // 4: protocol.FileMetadata
-	(*ReadReceipts)(nil),      // 5: protocol.ReadReceipts
-	(*ContactMessage)(nil),    // 6: protocol.ContactMessage
-	(*ProfileInfo)(nil),       // 7: protocol.ProfileInfo
-	(*ProfileRequest)(nil),    // 8: protocol.ProfileRequest
-	(*ProfileResponse)(nil),   // 9: protocol.ProfileResponse
-	(*ContactRequest)(nil),    // 10: protocol.ContactRequest
-	(*ContactAccept)(nil),     // 11: protocol.ContactAccept
-	nil,                       // 12: protocol.ProfileInfo.MetadataEntry
+	(*ReadReceipts)(nil),      // 4: protocol.ReadReceipts
+	(*ContactMessage)(nil),    // 5: protocol.ContactMessage
+	(*ProfileInfo)(nil),       // 6: protocol.ProfileInfo
+	(*ProfileRequest)(nil),    // 7: protocol.ProfileRequest
+	(*ProfileResponse)(nil),   // 8: protocol.ProfileResponse
+	(*ContactRequest)(nil),    // 9: protocol.ContactRequest
+	(*ContactAccept)(nil),     // 10: protocol.ContactAccept
+	nil,                       // 11: protocol.ProfileInfo.MetadataEntry
+	(*FileMetadata)(nil),      // 12: protocol.FileMetadata
 }
-var file_cmd_fyne_gui_new_core_protocol_chat_proto_depIdxs = []int32{
+var file_chat_proto_depIdxs = []int32{
 	2,  // 0: protocol.Envelope.chat_message:type_name -> protocol.ChatMessage
-	6,  // 1: protocol.Envelope.contact_message:type_name -> protocol.ContactMessage
+	5,  // 1: protocol.Envelope.contact_message:type_name -> protocol.ContactMessage
 	0,  // 2: protocol.ChatMessage.chat_type:type_name -> protocol.ChatMessage.ChatType
 	3,  // 3: protocol.ChatMessage.text:type_name -> protocol.TextMessage
-	4,  // 4: protocol.ChatMessage.file:type_name -> protocol.FileMetadata
-	5,  // 5: protocol.ChatMessage.read_receipts:type_name -> protocol.ReadReceipts
-	8,  // 6: protocol.ContactMessage.profile_request:type_name -> protocol.ProfileRequest
-	9,  // 7: protocol.ContactMessage.profile_response:type_name -> protocol.ProfileResponse
-	10, // 8: protocol.ContactMessage.contact_request:type_name -> protocol.ContactRequest
-	11, // 9: protocol.ContactMessage.contact_accept:type_name -> protocol.ContactAccept
-	12, // 10: protocol.ProfileInfo.metadata:type_name -> protocol.ProfileInfo.MetadataEntry
-	7,  // 11: protocol.ProfileResponse.profile:type_name -> protocol.ProfileInfo
-	7,  // 12: protocol.ContactRequest.sender_profile:type_name -> protocol.ProfileInfo
-	7,  // 13: protocol.ContactAccept.sender_profile:type_name -> protocol.ProfileInfo
+	12, // 4: protocol.ChatMessage.file_announcement:type_name -> protocol.FileMetadata
+	4,  // 5: protocol.ChatMessage.read_receipts:type_name -> protocol.ReadReceipts
+	7,  // 6: protocol.ContactMessage.profile_request:type_name -> protocol.ProfileRequest
+	8,  // 7: protocol.ContactMessage.profile_response:type_name -> protocol.ProfileResponse
+	9,  // 8: protocol.ContactMessage.contact_request:type_name -> protocol.ContactRequest
+	10, // 9: protocol.ContactMessage.contact_accept:type_name -> protocol.ContactAccept
+	11, // 10: protocol.ProfileInfo.metadata:type_name -> protocol.ProfileInfo.MetadataEntry
+	6,  // 11: protocol.ProfileResponse.profile:type_name -> protocol.ProfileInfo
+	6,  // 12: protocol.ContactRequest.sender_profile:type_name -> protocol.ProfileInfo
+	6,  // 13: protocol.ContactAccept.sender_profile:type_name -> protocol.ProfileInfo
 	14, // [14:14] is the sub-list for method output_type
 	14, // [14:14] is the sub-list for method input_type
 	14, // [14:14] is the sub-list for extension type_name
@@ -935,21 +861,22 @@ var file_cmd_fyne_gui_new_core_protocol_chat_proto_depIdxs = []int32{
 	0,  // [0:14] is the sub-list for field type_name
 }
 
-func init() { file_cmd_fyne_gui_new_core_protocol_chat_proto_init() }
-func file_cmd_fyne_gui_new_core_protocol_chat_proto_init() {
-	if File_cmd_fyne_gui_new_core_protocol_chat_proto != nil {
+func init() { file_chat_proto_init() }
+func file_chat_proto_init() {
+	if File_chat_proto != nil {
 		return
 	}
-	file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[0].OneofWrappers = []any{
+	file_file_transfer_proto_init()
+	file_chat_proto_msgTypes[0].OneofWrappers = []any{
 		(*Envelope_ChatMessage)(nil),
 		(*Envelope_ContactMessage)(nil),
 	}
-	file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[1].OneofWrappers = []any{
+	file_chat_proto_msgTypes[1].OneofWrappers = []any{
 		(*ChatMessage_Text)(nil),
-		(*ChatMessage_File)(nil),
+		(*ChatMessage_FileAnnouncement)(nil),
 		(*ChatMessage_ReadReceipts)(nil),
 	}
-	file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes[5].OneofWrappers = []any{
+	file_chat_proto_msgTypes[4].OneofWrappers = []any{
 		(*ContactMessage_ProfileRequest)(nil),
 		(*ContactMessage_ProfileResponse)(nil),
 		(*ContactMessage_ContactRequest)(nil),
@@ -959,18 +886,18 @@ func file_cmd_fyne_gui_new_core_protocol_chat_proto_init() {
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDesc), len(file_cmd_fyne_gui_new_core_protocol_chat_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_chat_proto_rawDesc), len(file_chat_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   12,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_cmd_fyne_gui_new_core_protocol_chat_proto_goTypes,
-		DependencyIndexes: file_cmd_fyne_gui_new_core_protocol_chat_proto_depIdxs,
-		EnumInfos:         file_cmd_fyne_gui_new_core_protocol_chat_proto_enumTypes,
-		MessageInfos:      file_cmd_fyne_gui_new_core_protocol_chat_proto_msgTypes,
+		GoTypes:           file_chat_proto_goTypes,
+		DependencyIndexes: file_chat_proto_depIdxs,
+		EnumInfos:         file_chat_proto_enumTypes,
+		MessageInfos:      file_chat_proto_msgTypes,
 	}.Build()
-	File_cmd_fyne_gui_new_core_protocol_chat_proto = out.File
-	file_cmd_fyne_gui_new_core_protocol_chat_proto_goTypes = nil
-	file_cmd_fyne_gui_new_core_protocol_chat_proto_depIdxs = nil
+	File_chat_proto = out.File
+	file_chat_proto_goTypes = nil
+	file_chat_proto_depIdxs = nil
 }
