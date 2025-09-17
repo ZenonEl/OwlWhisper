@@ -1,6 +1,7 @@
 syntax = "proto3";
 
 package protocol;
+import "file_transfer.proto";
 
 // Укажите здесь ваш правильный путь к Go-модулю. Например:
 // option go_package = "github.com/zentfany/owlwhisper-core/internal/protocol";
@@ -36,12 +37,11 @@ message ChatMessage {
         GROUP = 1;   // Групповой чат
     }
     ChatType chat_type = 1;
-    
     string chat_id = 2; // ID чата (для групп - ID группы, для личных - PeerID собеседника)
     
     oneof content {
         TextMessage text = 3;           // Текстовое сообщение
-        FileMetadata file = 4;          // Метаданные файла
+        FileMetadata file_announcement = 4;          // Метаданные файла
         ReadReceipts read_receipts = 5; // Уведомления о прочтении
     }
 }
@@ -51,12 +51,6 @@ message TextMessage {
     string reply_to_message_id = 2; // ID сообщения, на которое отвечаем
 }
 
-message FileMetadata {
-    string filename = 1;
-    int64 size_bytes = 2;
-    string mime_type = 3;
-    string hash_sha256 = 4;
-}
 
 message ReadReceipts {
     repeated string message_ids = 1; // ID прочитанных сообщений
