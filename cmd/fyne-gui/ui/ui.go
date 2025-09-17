@@ -10,6 +10,7 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/data/binding" // <-- НОВЫЙ ИМПОРТ
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -23,7 +24,8 @@ type AppUI struct {
 	statusLabel    *widget.Label
 	coreController newcore.ICoreController
 	contactService *services.ContactService
-	chatService    *services.ChatService       // <-- НОВОЕ ПОЛЕ
+	chatService    *services.ChatService
+	fileService    *services.FileService
 	dispatcher     *services.MessageDispatcher // <-- НОВОЕ ПОЛЕ
 	app            fyne.App
 	mainWindow     fyne.Window
@@ -31,7 +33,7 @@ type AppUI struct {
 	// --- ИЗМЕНЕНО: Переходим на Data Binding ---
 	peerIDLabelText binding.String
 	statusLabelText binding.String
-	messages        binding.StringList  // <-- Связанный список строк для чата
+	messages        binding.UntypedList // <-- Связанный список строк для чата
 	contacts        binding.UntypedList // <-- Связанный список контактов
 
 	// Состояние
@@ -39,7 +41,7 @@ type AppUI struct {
 }
 
 func NewAppUI(core newcore.ICoreController) *AppUI {
-	a := app.New()
+	a := app.NewWithID("com.owlwhisper.desktop")
 	win := a.NewWindow("Owl Whisper - Fyne GUI Test")
 
 	// 1. Сначала создаем пустую структуру AppUI
@@ -47,7 +49,7 @@ func NewAppUI(core newcore.ICoreController) *AppUI {
 		coreController:  core,
 		app:             a,
 		mainWindow:      win,
-		messages:        binding.NewStringList(),
+		messages:        binding.NewUntypedList(),
 		contacts:        binding.NewUntypedList(),
 		peerIDLabelText: binding.NewString(),
 		statusLabelText: binding.NewString(),
@@ -59,10 +61,15 @@ func NewAppUI(core newcore.ICoreController) *AppUI {
 
 	// 2. ТЕПЕРЬ создаем все сервисы. `ui` уже существует.
 	ui.contactService = services.NewContactService(core, ui.refreshContacts, ui)
-	ui.chatService = services.NewChatService(core, ui.contactService.Provider, func(formattedMessage string) {
-		ui.messages.Append(formattedMessage)
+	ui.chatService = services.NewChatService(core, ui.contactService.Provider, func(newWidget fyne.CanvasObject) {
+		// Callback для добавления нового сообщения в UI
+		ui.messages.Append(newWidget)
 	})
-	ui.dispatcher = services.NewMessageDispatcher(ui.contactService, ui.chatService)
+	ui.fileService = services.NewFileService(core, ui.contactService, func(newWidget fyne.CanvasObject) {
+		// Callback для добавления нового анонса файла в UI
+		ui.messages.Append(newWidget)
+	})
+	ui.dispatcher = services.NewMessageDispatcher(ui.contactService, ui.chatService, ui.fileService)
 
 	// 3. И ТОЛЬКО ТЕПЕРЬ, когда все сервисы готовы, мы создаем UI,
 	// который будет их использовать.
@@ -116,7 +123,6 @@ func (ui *AppUI) buildUI() fyne.CanvasObject {
 		ui.currentChatPeerID = contact.PeerID
 
 		// TODO: Загрузка истории чата из БД
-		ui.messages.Set([]string{}) // Пока что просто очищаем чат
 
 		ui.statusLabelText.Set(fmt.Sprintf("Открыт чат с %s", contact.Nickname))
 		log.Printf("INFO: Выбран чат с %s", contact.FullAddress())
@@ -129,9 +135,19 @@ func (ui *AppUI) buildUI() fyne.CanvasObject {
 	leftPanel := container.NewBorder(container.NewVBox(widget.NewLabel("Контакты:"), addContactButton), nil, nil, nil, contactsList)
 
 	chatMessages := widget.NewListWithData(ui.messages,
-		func() fyne.CanvasObject { return widget.NewLabel("template") },
+		func() fyne.CanvasObject {
+			// Создаем "контейнер" для любого типа сообщения
+			return container.NewMax()
+		},
 		func(item binding.DataItem, o fyne.CanvasObject) {
-			o.(*widget.Label).Bind(item.(binding.String))
+			untyped, _ := item.(binding.Untyped).Get()
+			// В зависимости от типа данных, кладем в контейнер нужный виджет
+			if card, ok := untyped.(*FileCard); ok {
+				o.(*fyne.Container).Objects = []fyne.CanvasObject{card}
+			} else if label, ok := untyped.(*widget.Label); ok {
+				o.(*fyne.Container).Objects = []fyne.CanvasObject{label}
+			}
+			o.(*fyne.Container).Refresh()
 		},
 	)
 
@@ -154,12 +170,41 @@ func (ui *AppUI) buildUI() fyne.CanvasObject {
 
 		// Оптимистичное обновление UI: добавляем свое сообщение сразу
 		myProfile := ui.contactService.GetMyProfile()
-		ui.messages.Append(fmt.Sprintf("[%s]: %s", myProfile.Nickname, text))
+		fullMessage := fmt.Sprintf("%s: %s", myProfile.FullAddress(), text)
+		textWidget := widget.NewLabel(fullMessage)
+		textWidget.Wrapping = fyne.TextWrapWord
+		ui.messages.Append(textWidget)
 
 		messageEntry.SetText("")
 	})
 
-	bottomPanel := container.NewBorder(nil, nil, nil, sendButton, messageEntry)
+	fileButton := widget.NewButtonWithIcon("", theme.FileIcon(), func() {
+		if ui.currentChatPeerID == "" {
+			ui.statusLabelText.Set("Сначала выберите контакт для отправки файла.")
+			return
+		}
+
+		// 2. Открываем системный диалог выбора файла
+		dialog.ShowFileOpen(func(reader fyne.URIReadCloser, err error) {
+			if err != nil || reader == nil {
+				return // Пользователь отменил выбор или произошла ошибка
+			}
+			filePath := reader.URI().Path()
+			log.Printf("INFO: [UI] Выбран файл для отправки: %s", filePath)
+
+			// 3. Вызываем метод FileService для анонса в фоновой горутине
+			go func() {
+				err := ui.fileService.AnnounceFile(ui.currentChatPeerID, filePath)
+				if err != nil {
+					// Безопасно обновляем UI в случае ошибки
+					ui.statusLabelText.Set(fmt.Sprintf("Ошибка анонса файла: %v", err))
+				}
+			}()
+
+		}, ui.mainWindow)
+	})
+
+	bottomPanel := container.NewBorder(nil, nil, fileButton, sendButton, messageEntry)
 	rightPanel := container.NewBorder(nil, bottomPanel, nil, nil, chatMessages)
 
 	split := container.NewHSplit(leftPanel, rightPanel)

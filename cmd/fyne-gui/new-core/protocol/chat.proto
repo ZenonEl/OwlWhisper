@@ -40,9 +40,11 @@ message ChatMessage {
     string chat_id = 2; // ID чата (для групп - ID группы, для личных - PeerID собеседника)
     
     oneof content {
-        TextMessage text = 3;           // Текстовое сообщение
-        FileMetadata file_announcement = 4;          // Метаданные файла
-        ReadReceipts read_receipts = 5; // Уведомления о прочтении
+        TextMessage text = 3;
+        FileMetadata file_announcement = 4; // Анонс файла
+        FileDownloadRequest file_request = 6; // Запрос на скачивание
+        FileTransferStatus file_status = 7; // Статус передачи
+        ReadReceipts read_receipts = 5;
     }
 }
 
