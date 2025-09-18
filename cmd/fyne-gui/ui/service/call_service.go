@@ -3,15 +3,21 @@
 package services
 
 import (
+	"encoding/binary"
 	"fmt"
+	"io"
 	"log"
 	"sync"
 	"time"
 
 	protocol "OwlWhisper/cmd/fyne-gui/new-core/protocol"
 
+	"github.com/ebitengine/oto/v3"
 	"github.com/google/uuid"
+	"github.com/gordonklaus/portaudio"
 	"github.com/pion/webrtc/v4"
+	"github.com/pion/webrtc/v4/pkg/media"
+	"github.com/pion/webrtc/v4/pkg/media/oggwriter"
 	"google.golang.org/protobuf/proto"
 
 	newcore "OwlWhisper/cmd/fyne-gui/new-core"
@@ -56,19 +62,27 @@ type CallService struct {
 }
 
 func NewCallService(core newcore.ICoreController, cs *ContactService, onIncomingCall func(string, string)) (*CallService, error) {
-	// --- Настройка медиа-движка ---
-	// Мы пока не используем никакие медиа, поэтому настройки простые.
+	// --- ИСПРАВЛЕНИЕ: ЯВНАЯ РЕГИСТРАЦИЯ КОДЕКОВ ---
 	m := &webrtc.MediaEngine{}
 
-	// Создаем API Pion с этим движком
+	// Говорим Pion, что мы поддерживаем аудио-кодек Opus.
+	// Это стандарт для WebRTC, он обеспечивает высокое качество.
+	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2, SDPFmtpLine: "minptime=10;useinbandfec=1"},
+		PayloadType:        111,
+	}, webrtc.RTPCodecTypeAudio); err != nil {
+		return nil, err
+	}
+
+	// TODO: В будущем, для видео, мы добавим сюда регистрацию видео-кодеков (VP8, H264).
+	// if err := m.RegisterCodec(webrtc.RTPCodecParameters{ ... }); err != nil { ... }
+
+	// Создаем API Pion с этим настроенным движком
 	api := webrtc.NewAPI(webrtc.WithMediaEngine(m))
 
-	// Конфигурация PeerConnection. STUN-серверы Google - хороший старт.
 	config := webrtc.Configuration{
 		ICEServers: []webrtc.ICEServer{
-			{
-				URLs: []string{"stun:stun.l.google.com:19302"},
-			},
+			{URLs: []string{"stun:stun.l.google.com:19302"}},
 		},
 	}
 
@@ -98,6 +112,28 @@ func (cs *CallService) InitiateCall(recipientID string) error {
 	if err != nil {
 		return err
 	}
+
+	audioTrack, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus}, "audio", "pion")
+	if err != nil {
+		return err
+	}
+
+	rtpSender, err := pc.AddTrack(audioTrack)
+	if err != nil {
+		return err
+	}
+
+	// Запускаем горутину, которая читает RTCP пакеты (необходимо для статистики)
+	go func() {
+		rtcpBuf := make([]byte, 1500)
+		for {
+			if _, _, rtcpErr := rtpSender.Read(rtcpBuf); rtcpErr != nil {
+				return
+			}
+		}
+	}()
+
+	go cs.captureAudio(audioTrack)
 
 	// --- КЛЮЧЕВОЕ ИЗМЕНЕНИЕ №1: Добавляем Data Channel ---
 	// Это заставляет Pion сгенерировать правильный SDP с ice-ufrag.
@@ -266,6 +302,30 @@ func (cs *CallService) AcceptCall() error {
 		// TODO: Настроить обработчики для этого канала (OnOpen, OnMessage)
 	})
 
+	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+		log.Printf("INFO: [CallService] Получен новый трек! Codec: %s", track.Codec().MimeType)
+		// Запускаем горутину для воспроизведения
+		go cs.playTrack(track)
+	})
+
+	audioTrack, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus}, "audio", "pion")
+	if err != nil {
+		return err
+	}
+	rtpSender, err := pc.AddTrack(audioTrack)
+	if err != nil {
+		return err
+	}
+	go func() {
+		rtcpBuf := make([]byte, 1500)
+		for {
+			if _, _, rtcpErr := rtpSender.Read(rtcpBuf); rtcpErr != nil {
+				return
+			}
+		}
+	}()
+	go cs.captureAudio(audioTrack)
+
 	// Настраиваем обработчики
 	pc.OnICECandidate(func(c *webrtc.ICECandidate) {
 		if c == nil {
@@ -385,4 +445,136 @@ func (cs *CallService) applyPendingCandidates_unsafe(peerID string) {
 		// Очищаем буфер для этого пира
 		delete(cs.pendingCandidates, peerID)
 	}
+}
+
+// --- НОВАЯ HELPER-ФУНКЦИЯ ДЛЯ ВОСПРОИЗВЕДЕНИЯ ---
+func playTrack(track *webrtc.TrackRemote) {
+	// Создаем ogg-файл для отладки, чтобы можно было прослушать, что пришло.
+	// В реальном приложении здесь будет воспроизведение напрямую в динамики.
+	fileName := fmt.Sprintf("output-%s.ogg", track.ID())
+	file, err := oggwriter.New(fileName, track.Codec().ClockRate, track.Codec().Channels)
+	if err != nil {
+		log.Printf("ERROR: Не удалось создать ogg-файл: %v", err)
+		return
+	}
+	defer file.Close()
+
+	log.Printf("INFO: Начата запись входящего аудио в файл %s", fileName)
+
+	for {
+		// Читаем RTP-пакет из потока
+		rtpPacket, _, err := track.ReadRTP()
+		if err != nil {
+			if err == io.EOF {
+				log.Printf("INFO: Аудио-поток завершен для файла %s", fileName)
+				return
+			}
+			log.Printf("ERROR: Ошибка чтения RTP-пакета: %v", err)
+			return
+		}
+		// Записываем пакет в ogg-файл
+		if err := file.WriteRTP(rtpPacket); err != nil {
+			log.Printf("ERROR: Ошибка записи в ogg-файл: %v", err)
+			return
+		}
+	}
+}
+
+const (
+	sampleRate = 48000
+	channels   = 2
+	frameSize  = 960 // 20ms at 48kHz
+)
+
+// captureAudio захватывает аудио с микрофона и пишет его в WebRTC трек.
+func (cs *CallService) captureAudio(track *webrtc.TrackLocalStaticSample) {
+	portaudio.Initialize()
+	defer portaudio.Terminate()
+
+	in := make([]int16, frameSize*channels)
+	stream, err := portaudio.OpenDefaultStream(channels, 0, float64(sampleRate), len(in), in)
+	if err != nil {
+		log.Printf("ERROR: [PortAudio] Не удалось открыть поток с микрофона: %v", err)
+		return
+	}
+	defer stream.Close()
+
+	if err := stream.Start(); err != nil {
+		log.Printf("ERROR: [PortAudio] Не удалось начать захват с микрофона: %v", err)
+		return
+	}
+	log.Println("INFO: [PortAudio] Захват аудио с микрофона начат...")
+
+	for {
+		// Проверяем, активен ли еще звонок
+		cs.pcMutex.RLock()
+		pcState := cs.peerConnection
+		cs.pcMutex.RUnlock()
+		if pcState == nil || pcState.ConnectionState() == webrtc.PeerConnectionStateClosed {
+			log.Println("INFO: [PortAudio] Звонок завершен, остановка захвата аудио.")
+			stream.Stop()
+			return
+		}
+
+		// Читаем данные с микрофона
+		if err := stream.Read(); err != nil {
+			// log.Printf("WARN: [PortAudio] Ошибка чтения с микрофона: %v", err)
+			continue
+		}
+
+		// Преобразуем int16 в float32 для Pion (это может потребовать оптимизации)
+		// Для простоты пока отправляем как есть, но Pion ожидает media.Sample
+		sample := make([]byte, len(in)*2)
+		for i := range in {
+			binary.LittleEndian.PutUint16(sample[i*2:], uint16(in[i]))
+		}
+
+		// Пишем сэмпл в трек
+		if err := track.WriteSample(media.Sample{Data: sample, Duration: time.Millisecond * 20}); err != nil {
+			// log.Printf("WARN: [Pion] Ошибка записи аудио сэмпла: %v", err)
+		}
+	}
+}
+
+// trackReader - это адаптер, который превращает *webrtc.TrackRemote в io.Reader.
+type trackReader struct {
+	track *webrtc.TrackRemote
+}
+
+// Read реализует интерфейс io.Reader.
+func (r *trackReader) Read(p []byte) (n int, err error) {
+	// Вызываем оригинальный Read, но игнорируем третье возвращаемое значение (атрибуты).
+	n, _, err = r.track.Read(p)
+	return
+}
+
+// ЗАМЕНИТЬ ЭТУ ФУНКЦИЮ в call_service.go
+
+func (cs *CallService) playTrack(track *webrtc.TrackRemote) {
+	op := &oto.NewContextOptions{
+		SampleRate:   sampleRate,
+		ChannelCount: channels,
+		Format:       oto.FormatSignedInt16LE,
+	}
+
+	otoCtx, ready, err := oto.NewContext(op)
+	if err != nil {
+		log.Printf("ERROR: [Oto] Не удалось создать аудио-контекст: %v", err)
+		return
+	}
+	<-ready
+
+	// Создаем плеер, передавая ему наш адаптер.
+	player := otoCtx.NewPlayer(&trackReader{track: track})
+	defer player.Close()
+
+	player.Play()
+
+	log.Println("INFO: [Oto] Воспроизведение аудио начато...")
+
+	// ИСПРАВЛЕНО: Мы больше ничего не ждем.
+	// Плеер будет работать в своем фоновом потоке.
+	// Когда собеседник завершит звонок, `track.Read()` внутри адаптера
+	// вернет ошибку io.EOF. Это заставит `player` остановиться
+	// и горутина завершится сама собой. Это правильное поведение.
 }
