@@ -58,28 +58,32 @@ func NewAppUI(core newcore.ICoreController) *AppUI {
 	ui.peerIDLabelText.Set("PeerID: загрузка...")
 	ui.statusLabelText.Set("Статус: инициализация...")
 
-	// 2. ТЕПЕРЬ создаем все сервисы. `ui` уже существует.
+	// --- ИНИЦИАЛИЗАЦИЯ СЕРВИСОВ ---
+
+	// 1. Создаем ContactService. Ему нужен UI для показа диалогов.
 	ui.contactService = services.NewContactService(core, ui.refreshContacts, ui)
+
+	// 2. Создаем ChatService.
 	ui.chatService = services.NewChatService(core, ui.contactService.Provider, func(newWidget fyne.CanvasObject) {
-		// Callback для добавления нового сообщения в UI
 		ui.messages.Append(newWidget)
 	})
-	// 3. Создаем FileService. Ему больше не нужен callback.
+
+	// 3. Создаем FileService.
 	ui.fileService = services.NewFileService(core, ui.contactService, ui.chatService)
 
-	// 4. Создаем CallService
-	callSvc, err := services.NewCallService(core, ui.contactService)
+	// 4. Создаем CallService.
+	// ИСПРАВЛЕНО: Передаем ему callback-функцию onIncomingCall.
+	callSvc, err := services.NewCallService(core, ui.contactService, ui.OnIncomingCall)
 	if err != nil {
 		log.Fatalf("КРИТИЧЕСКАЯ ОШИБКА: Не удалось создать CallService: %v", err)
 	}
 	ui.callService = callSvc
 
-	// 5. Создаем Диспетчер, передавая ему все три сервиса
+	// 5. Создаем Диспетчер, передавая ему все сервисы.
 	ui.dispatcher = services.NewMessageDispatcher(ui.contactService, ui.chatService, ui.fileService, ui.callService)
 
 	win.SetContent(ui.buildUI())
 	win.Resize(fyne.NewSize(800, 600))
-
 	return ui
 }
 
@@ -304,4 +308,29 @@ func (ui *AppUI) refreshContacts() {
 	}
 	// Устанавливаем новые данные, Fyne сам обновит список.
 	ui.contacts.Set(items)
+}
+
+func (ui *AppUI) OnIncomingCall(senderID, callID string) {
+	// TODO: Найти никнейм по senderID
+	senderInfo := senderID[:12] + "..."
+
+	// Используем dialog.ShowConfirm, так как он потокобезопасен
+	dialog.ShowConfirm(
+		"Входящий звонок",
+		fmt.Sprintf("Вам звонит %s. Принять?", senderInfo),
+		func(confirm bool) {
+			go func() { // Запускаем обработку в горутине, чтобы не блокировать UI
+				if !confirm {
+					ui.callService.HangupCall() // Отклоняем звонок
+					return
+				}
+
+				// Принимаем звонок
+				if err := ui.callService.AcceptCall(); err != nil {
+					log.Printf("ERROR: [UI] Ошибка принятия звонка: %v", err)
+				}
+			}()
+		},
+		ui.mainWindow,
+	)
 }
