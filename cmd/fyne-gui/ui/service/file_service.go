@@ -361,6 +361,18 @@ func (fs *FileService) HandleFileAnnouncement(senderID string, metadata *protoco
 func (fs *FileService) RequestFileDownload(metadata *protocol.FileMetadata, senderID string) {
 	log.Printf("INFO: [FileService] Запрашиваем скачивание файла %s от %s", metadata.Filename, senderID[:8])
 
+	// --- ИСПРАВЛЕНИЕ: Сначала обновляем статус, потом отправляем ---
+	fs.mu.Lock()
+	state, ok := fs.transfers[metadata.TransferId]
+	if !ok {
+		log.Printf("ERROR: [FileService] Попытка скачать файл с неизвестным transferID: %s", metadata.TransferId)
+		fs.mu.Unlock()
+		return
+	}
+	state.Status = "downloading"
+	fs.mu.Unlock()
+
+	// Теперь отправляем запрос
 	req := &protocol.FileDownloadRequest{
 		TransferId: metadata.TransferId,
 	}
