@@ -66,7 +66,7 @@ func NewAppUI(core newcore.ICoreController) *AppUI {
 		ui.messages.Append(newWidget)
 	})
 	// 3. Создаем FileService. Ему больше не нужен callback.
-	ui.fileService = services.NewFileService(core, ui.contactService)
+	ui.fileService = services.NewFileService(core, ui.contactService, ui.chatService)
 
 	// 4. Создаем Диспетчер, передавая ему все три сервиса
 	ui.dispatcher = services.NewMessageDispatcher(ui.contactService, ui.chatService, ui.fileService)
@@ -261,8 +261,10 @@ func (ui *AppUI) eventLoop() {
 				ui.fileService.HandleStreamData(payload)
 			}
 		case "StreamClosed":
-			// TODO: Обработать завершение передачи (проверить хеш)
-			// ...
+			if payload, ok := event.Payload.(newcore.StreamClosedPayload); ok {
+				// Передаем событие в FileService для завершения
+				ui.fileService.HandleStreamClosed(payload)
+			}
 		}
 	}
 }

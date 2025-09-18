@@ -3,11 +3,14 @@
 package services
 
 import (
+	"bufio"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -92,7 +95,6 @@ type FileService struct {
 	mu        sync.RWMutex
 }
 
-func NewFileService(core newcore.ICoreController, cs *ContactService) *FileService {
 func NewFileService(core newcore.ICoreController, cs *ContactService, chs *ChatService) *FileService {
 	return &FileService{
 		core:           core,
@@ -322,15 +324,6 @@ func (fs *FileService) HandleIncomingStream(payload newcore.NewIncomingStreamPay
 	go fs.streamFileProcessor(state)
 }
 
-		}
-
-		// 4. Закрываем стрим, когда все отправлено
-		fs.core.CloseStream(streamID)
-		state.Status = "completed"
-		log.Printf("INFO: [FileService] Передача файла %s завершена.", state.Metadata.Filename)
-	}()
-}
-
 // HandleFileAnnouncement (Фаза 2: Получение анонса) - вызывается из Dispatcher'а.
 func (fs *FileService) HandleFileAnnouncement(senderID string, metadata *protocol.FileMetadata) (*FileCard, error) {
 	fs.mu.Lock()
@@ -420,6 +413,9 @@ func (fs *FileService) HandleStreamData(payload newcore.StreamDataReceivedPayloa
 		return
 	}
 
+	if _, err := state.pipeWriter.Write(payload.Data); err != nil {
+		log.Printf("ERROR: [FileService] Ошибка записи в pipe для стрима %d: %v", payload.StreamID, err)
+	}
 }
 
 // streamFileProcessor - КЛЮЧЕВЫЕ ИЗМЕНЕНИЯ ЗДЕСЬ
@@ -517,6 +513,11 @@ func (fs *FileService) streamFileProcessor(state *TransferState) {
 	// TODO: Уведомить UI о финальном статусе
 }
 
+// HandleStreamClosed - ИЗМЕНЕНО: теперь он закрывает "трубу".
+func (fs *FileService) HandleStreamClosed(payload newcore.StreamClosedPayload) {
+	// Мы больше не полагаемся на это событие для завершения файла.
+	// Можно добавить лог для отладки, но не более.
+	log.Printf("INFO: [FileService] Стрим %d закрыт.", payload.StreamID)
 }
 
 func (fs *FileService) findTransferByStreamID(streamID uint64) (*TransferState, bool) {

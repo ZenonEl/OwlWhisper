@@ -86,7 +86,7 @@ type Config struct {
 // которая в точности повторяет нашу рабочую "ультимативную" конфигурацию из PoC.
 func DefaultConfig() Config {
 	return Config{
-		EnableMDNS: true, // Включаем по умолчанию, это очень полезно.
+		EnableMDNS: false, // Включаем по умолчанию, это очень полезно.
 		EnableDHT:  true,
 
 		EnableAutoRelay:    true,
