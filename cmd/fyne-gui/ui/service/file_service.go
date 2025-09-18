@@ -170,15 +170,15 @@ func (fs *FileService) AnnounceFile(recipientID, filePath string) (*FileCard, er
 
 // HandleDownloadRequest (Фаза 4: Раздача) - вызывается из Dispatcher'а.
 func (fs *FileService) HandleDownloadRequest(req *protocol.FileDownloadRequest, senderID string) {
-	fs.mu.Lock()
+	fs.mu.RLock()
 	state, ok := fs.transfers[req.TransferId]
+	fs.mu.RUnlock()
+
 	if !ok {
 		log.Printf("WARN: [FileService] Получен запрос на скачивание неизвестного transferID: %s", req.TransferId)
-		// TODO: Отправить FileUnavailable
-		fs.mu.Unlock()
+		// TODO: Отправить FileTransferStatus{UNAVAILABLE}
 		return
 	}
-	fs.mu.Unlock()
 
 	log.Printf("INFO: [FileService] Получен запрос на скачивание файла %s от %s", state.Metadata.Filename, senderID[:8])
 
@@ -247,10 +247,6 @@ func (fs *FileService) streamFileSender(state *TransferState, recipientID string
 		offset += int64(bytesRead)
 	}
 
-			if err := fs.core.WriteToStream(streamID, buffer[:n]); err != nil {
-				log.Printf("ERROR: [FileService] Ошибка записи в файловый стрим: %v", err)
-				return
-			}
 	// 4. Отправляем финальный "кусок" с флагом last_chunk=true
 	finalChunk := &protocol.FileData{
 		TransferId: state.TransferID,
