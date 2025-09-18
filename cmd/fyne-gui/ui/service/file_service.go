@@ -368,29 +368,16 @@ func (fs *FileService) RequestFileDownload(metadata *protocol.FileMetadata, send
 	}
 }
 
-// HandleIncomingStream - вызывается из Core, когда к нам открыли файловый стрим.
-func (fs *FileService) HandleIncomingStream(payload newcore.NewIncomingStreamPayload) {
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
+// HandleStreamData - ИЗМЕНЕНО: теперь он просто пишет в "трубу".
+func (fs *FileService) HandleStreamData(payload newcore.StreamDataReceivedPayload) {
+	fs.mu.RLock()
+	state, ok := fs.findTransferByStreamID(payload.StreamID)
+	fs.mu.RUnlock()
 
-	// Нам нужно найти, к какой передаче относится этот стрим.
-	// Пока что будем делать это простым перебором (не очень эффективно, но для MVP сойдет).
-	var targetState *TransferState
-	for _, state := range fs.transfers {
-		if state.IsIncoming && state.Metadata.Filename != "" { // Ищем активную входящую передачу
-			targetState = state
-			break
-		}
-	}
-
-	if targetState == nil {
-		log.Printf("WARN: [FileService] Получен входящий стрим, но для него нет активной передачи.")
-		fs.core.CloseStream(payload.StreamID) // Закрываем ненужный стрим
+	if !ok {
 		return
 	}
 
-	targetState.StreamID = payload.StreamID
-	log.Printf("INFO: [FileService] Входящий стрим %d связан с передачей файла %s", payload.StreamID, targetState.Metadata.Filename)
 }
 
 // streamFileProcessor - КЛЮЧЕВЫЕ ИЗМЕНЕНИЯ ЗДЕСЬ
