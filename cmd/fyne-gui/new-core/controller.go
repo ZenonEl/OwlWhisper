@@ -19,9 +19,10 @@ import (
 )
 
 const (
-	// CHAT_PROTOCOL_ID - уникальный идентификатор нашего чат-протокола.
-	CHAT_PROTOCOL_ID = "/owl-whisper/1.0.0"
-	FILE_PROTOCOL_ID = "/owl-whisper/file/1.0.0" // FILE_PROTOCOL_ID
+	// CHAT_PROTOCOL_ID - для обычных сообщений (текст, анонсы файлов, сигнализация)
+	CHAT_PROTOCOL_ID = protocol.ID("/owl-whisper/chat/1.0.0")
+	// FILE_PROTOCOL_ID - для высокопроизводительной передачи файлов
+	FILE_PROTOCOL_ID = "/owl-whisper/file/1.0.0"
 )
 
 // --- Структуры Событий (Контракт с GUI) ---
@@ -133,7 +134,7 @@ func (c *CoreController) Start() error {
 		PeerID: c.node.Host().ID().String(),
 	})
 	// 2. Регистрируем обработчик входящих потоков
-	c.node.SetStreamHandler(CHAT_PROTOCOL_ID, c.handleChatMessageStream)
+	c.node.SetStreamHandler(CHAT_PROTOCOL_ID, c.handleGenericStream)
 	c.node.SetStreamHandler(FILE_PROTOCOL_ID, c.handleFileTransferStream)
 	// Регистрируем обработчик сетевых событий для отслеживания подключений
 	c.node.Host().Network().Notify(c.newNetworkNotifee())
@@ -273,24 +274,7 @@ func (c *CoreController) Events() <-chan Event {
 	return c.eventChan
 }
 
-// handleStream - это наш главный обработчик входящих сообщений.
-func (c *CoreController) handleStream(stream network.Stream) {
-	// ВАЖНО: handleStream теперь должен различать типы стримов.
-	// Если это наш основной чат-протокол, делаем одно.
-	// Если файловый - другое.
-
-	protocolID := stream.Protocol()
-
-	if protocolID == CHAT_PROTOCOL_ID {
-		// Это обычное чат-сообщение
-		c.handleChatMessageStream(stream)
-	} else if protocolID == FILE_PROTOCOL_ID {
-		// Предполагаем, что это файловый стрим
-		c.handleFileTransferStream(stream)
-	}
-}
-
-func (c *CoreController) handleChatMessageStream(stream network.Stream) {
+func (c *CoreController) handleGenericStream(stream network.Stream) {
 	defer stream.Close()
 	senderID := stream.Conn().RemotePeer()
 	data, err := io.ReadAll(stream)

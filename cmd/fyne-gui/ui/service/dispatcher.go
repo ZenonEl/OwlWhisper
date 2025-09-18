@@ -15,6 +15,7 @@ type MessageDispatcher struct {
 	contactService *ContactService
 	chatService    *ChatService
 	fileService    *FileService
+	callService    *CallService
 }
 
 type AppUIProvider interface {
@@ -22,11 +23,12 @@ type AppUIProvider interface {
 	// В будущем здесь будут другие методы, например, OnContactRequestReceived
 }
 
-func NewMessageDispatcher(cs *ContactService, chs *ChatService, fs *FileService) *MessageDispatcher {
+func NewMessageDispatcher(cs *ContactService, chs *ChatService, fs *FileService, cls *CallService) *MessageDispatcher {
 	return &MessageDispatcher{
 		contactService: cs,
 		chatService:    chs,
 		fileService:    fs,
+		callService:    cls,
 	}
 }
 
@@ -49,6 +51,11 @@ func (d *MessageDispatcher) HandleIncomingData(senderID string, data []byte) {
 	case *protocol.Envelope_ContactMessage:
 		// Это сообщение для управления контактами.
 		d.handleContactMessage(senderID, payload.ContactMessage)
+
+	case *protocol.Envelope_SignalingMessage:
+		// Это сигнальное сообщение для звонка. Передаем его в CallService.
+		log.Printf("INFO: [Dispatcher] Получено SignalingMessage от %s", senderID)
+		d.callService.HandleSignalingMessage(senderID, payload.SignalingMessage)
 
 	default:
 		log.Printf("WARN: [Dispatcher] Получен Envelope с неизвестным типом payload от %s", senderID)

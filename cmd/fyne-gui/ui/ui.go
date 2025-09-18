@@ -20,23 +20,24 @@ import (
 )
 
 type AppUI struct {
-	peerIDLabel    *widget.Label
-	statusLabel    *widget.Label
+	app        fyne.App
+	mainWindow fyne.Window
+
+	peerIDLabel *widget.Label
+	statusLabel *widget.Label
+
+	peerIDLabelText binding.String
+	statusLabelText binding.String
+	messages        binding.UntypedList
+	contacts        binding.UntypedList
+
 	coreController newcore.ICoreController
 	contactService *services.ContactService
 	chatService    *services.ChatService
 	fileService    *services.FileService
-	dispatcher     *services.MessageDispatcher // <-- НОВОЕ ПОЛЕ
-	app            fyne.App
-	mainWindow     fyne.Window
+	callService    *services.CallService
+	dispatcher     *services.MessageDispatcher
 
-	// --- ИЗМЕНЕНО: Переходим на Data Binding ---
-	peerIDLabelText binding.String
-	statusLabelText binding.String
-	messages        binding.UntypedList // <-- Связанный список строк для чата
-	contacts        binding.UntypedList // <-- Связанный список контактов
-
-	// Состояние
 	currentChatPeerID string
 }
 
@@ -57,8 +58,6 @@ func NewAppUI(core newcore.ICoreController) *AppUI {
 	ui.peerIDLabelText.Set("PeerID: загрузка...")
 	ui.statusLabelText.Set("Статус: инициализация...")
 
-	// --- ИСПРАВЛЕННЫЙ ПОРЯДОК ---
-
 	// 2. ТЕПЕРЬ создаем все сервисы. `ui` уже существует.
 	ui.contactService = services.NewContactService(core, ui.refreshContacts, ui)
 	ui.chatService = services.NewChatService(core, ui.contactService.Provider, func(newWidget fyne.CanvasObject) {
@@ -68,11 +67,16 @@ func NewAppUI(core newcore.ICoreController) *AppUI {
 	// 3. Создаем FileService. Ему больше не нужен callback.
 	ui.fileService = services.NewFileService(core, ui.contactService, ui.chatService)
 
-	// 4. Создаем Диспетчер, передавая ему все три сервиса
-	ui.dispatcher = services.NewMessageDispatcher(ui.contactService, ui.chatService, ui.fileService)
+	// 4. Создаем CallService
+	callSvc, err := services.NewCallService(core, ui.contactService)
+	if err != nil {
+		log.Fatalf("КРИТИЧЕСКАЯ ОШИБКА: Не удалось создать CallService: %v", err)
+	}
+	ui.callService = callSvc
 
-	// 3. И ТОЛЬКО ТЕПЕРЬ, когда все сервисы готовы, мы создаем UI,
-	// который будет их использовать.
+	// 5. Создаем Диспетчер, передавая ему все три сервиса
+	ui.dispatcher = services.NewMessageDispatcher(ui.contactService, ui.chatService, ui.fileService, ui.callService)
+
 	win.SetContent(ui.buildUI())
 	win.Resize(fyne.NewSize(800, 600))
 
@@ -211,8 +215,21 @@ func (ui *AppUI) buildUI() fyne.CanvasObject {
 		}, ui.mainWindow)
 	})
 
+	callButton := widget.NewButtonWithIcon("", theme.MediaPlayIcon(), func() {
+		if ui.currentChatPeerID != "" {
+			go func() {
+				log.Printf("INFO: [UI] Нажата кнопка звонка пиру %s", ui.currentChatPeerID)
+				if err := ui.callService.InitiateCall(ui.currentChatPeerID); err != nil {
+					log.Printf("ERROR: [UI] Ошибка инициации звонка: %v", err)
+				}
+			}()
+		}
+	})
+
+	chatHeader := container.NewBorder(nil, nil, nil, callButton, widget.NewLabel("Чат"))
+
 	bottomPanel := container.NewBorder(nil, nil, fileButton, sendButton, messageEntry)
-	rightPanel := container.NewBorder(nil, bottomPanel, nil, nil, chatMessages)
+	rightPanel := container.NewBorder(chatHeader, bottomPanel, nil, nil, chatMessages)
 
 	split := container.NewHSplit(leftPanel, rightPanel)
 	split.Offset = 0.3

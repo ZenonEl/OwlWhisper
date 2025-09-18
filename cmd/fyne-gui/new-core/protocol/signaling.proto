@@ -1,0 +1,59 @@
+// cmd/fyne-gui/new-core/protocol/signaling.proto
+
+syntax = "proto3";
+
+package protocol;
+
+option go_package = "./";
+
+
+// ---------------------------------------------------------------- //
+// --- СООБЩЕНИЯ ДЛЯ СИГНАЛИЗАЦИИ WEBRTC --- //
+// ---------------------------------------------------------------- //
+
+// SignalingMessage - это обертка для всех сообщений, связанных
+// с установкой и управлением P2P медиа-соединениями.
+message SignalingMessage {
+    string call_id = 1; // Уникальный ID для этого конкретного звонка (генерируется GUI)
+
+    oneof payload {
+        CallOffer      offer = 2;       // Предложение начать звонок
+        CallAnswer     answer = 3;      // Ответ на предложение
+        ICECandidate   candidate = 4;   // Кандидат для установки NAT-пробивания
+        CallHangup     hangup = 5;      // Завершение звонка
+        CallNegotiation negotiation = 6; // Для пересогласования (вкл/выкл видео)
+    }
+}
+
+// CallOffer содержит SDP (Session Description Protocol) "предложение".
+// Это текстовое описание того, какие медиа-потоки (аудио, видео)
+// и с какими кодеками хочет отправить инициатор.
+message CallOffer {
+    string sdp = 1;
+}
+
+// CallAnswer содержит SDP "ответ".
+// Получатель анализирует Offer и генерирует свой SDP, где указывает,
+// какие потоки и кодеки он готов принять.
+message CallAnswer {
+    string sdp = 1;
+}
+
+// ICECandidate содержит информацию, необходимую для установки прямого
+// соединения (hole punching) для медиа-трафика.
+// Клиенты обмениваются несколькими такими сообщениями.
+message ICECandidate {
+    string candidate_json = 1; // ICE-кандидат, обычно в формате JSON
+}
+
+// CallHangup - простое сообщение для завершения звонка.
+message CallHangup {
+    string reason = 1; // "занято", "отклонено", "завершено"
+}
+
+// CallNegotiation используется для изменения параметров звонка "на лету"
+// (например, включение видео или демонстрации экрана).
+// По сути, это просто новый Offer.
+message CallNegotiation {
+    string sdp = 1;
+}
