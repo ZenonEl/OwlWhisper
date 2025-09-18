@@ -183,40 +183,89 @@ func (fs *FileService) HandleDownloadRequest(req *protocol.FileDownloadRequest, 
 	log.Printf("INFO: [FileService] Получен запрос на скачивание файла %s от %s", state.Metadata.Filename, senderID[:8])
 
 	// Запускаем процесс передачи в новой горутине
-	go func() {
-		// 1. Открываем новый стрим для файла
-		streamID, err := fs.core.OpenStream(senderID, newcore.FILE_PROTOCOL_ID)
+	go fs.streamFileSender(state, senderID)
+}
+
+// streamFileSender - горутина, которая управляет ОТПРАВКОЙ одного файла.
+func (fs *FileService) streamFileSender(state *TransferState, recipientID string) {
+	// 1. Открываем новый стрим для файла
+	streamID, err := fs.core.OpenStream(recipientID, newcore.FILE_PROTOCOL_ID)
+	if err != nil {
+		log.Printf("ERROR: [FileService] Не удалось открыть файловый стрим: %v", err)
+		state.Status = "failed"
+		// TODO: Уведомить UI об ошибке
+		return
+	}
+	defer fs.core.CloseStream(streamID)
+
+	state.StreamID = streamID
+	state.Status = "transferring"
+	// TODO: Уведомить UI, что передача началась
+
+	// 2. Открываем файл для чтения
+	file, err := os.Open(state.FilePath)
+	if err != nil {
+		log.Printf("ERROR: [FileService] Не удалось открыть файл для отправки '%s': %v", state.FilePath, err)
+		state.Status = "failed"
+		// TODO: Отправить FileTransferStatus с ошибкой
+		return
+	}
+	defer file.Close()
+
+	// 3. Читаем и отправляем "кусками" в виде Protobuf-сообщений
+	log.Printf("INFO: [FileService] Начата передача файла %s по стриму %d", state.Metadata.Filename, streamID)
+	buffer := make([]byte, 64*1024) // 64KB chunk size
+	var offset int64 = 0
+	for {
+		bytesRead, err := file.Read(buffer)
+		if err == io.EOF {
+			// Достигли конца файла, выходим из цикла
+			break
+		}
 		if err != nil {
-			log.Printf("ERROR: [FileService] Не удалось открыть файловый стрим: %v", err)
+			log.Printf("ERROR: [FileService] Ошибка чтения файла '%s': %v", state.FilePath, err)
+			state.Status = "failed"
+			// TODO: Отправить FileTransferStatus с ошибкой
 			return
 		}
 
-		state.StreamID = streamID
-		state.Status = "transferring"
+		// Создаем Protobuf-сообщение для "куска"
+		chunk := &protocol.FileData{
+			TransferId: state.TransferID,
+			ChunkData:  buffer[:bytesRead],
+			Offset:     offset,
+			LastChunk:  false,
+		}
 
-		// 2. Открываем файл для чтения
-		file, err := os.Open(state.FilePath)
-		if err != nil {
-			log.Printf("ERROR: [FileService] Не удалось открыть файл для отправки: %v", err)
+		// Отправляем "кусок"
+		if err := fs.sendChunk(streamID, chunk); err != nil {
+			log.Printf("ERROR: [FileService] Ошибка отправки 'куска' для файла '%s': %v", state.FilePath, err)
+			state.Status = "failed"
+			// TODO: Отправить FileTransferStatus с ошибкой
 			return
 		}
-		defer file.Close()
-
-		// 3. Читаем и отправляем "кусками"
-		buffer := make([]byte, 65536)
-		for {
-			n, err := file.Read(buffer)
-			if err == io.EOF {
-				break
-			}
-			if err != nil { /* обработка ошибки */
-				return
-			}
+		offset += int64(bytesRead)
+	}
 
 			if err := fs.core.WriteToStream(streamID, buffer[:n]); err != nil {
 				log.Printf("ERROR: [FileService] Ошибка записи в файловый стрим: %v", err)
 				return
 			}
+	// 4. Отправляем финальный "кусок" с флагом last_chunk=true
+	finalChunk := &protocol.FileData{
+		TransferId: state.TransferID,
+		LastChunk:  true,
+	}
+	if err := fs.sendChunk(streamID, finalChunk); err != nil {
+		log.Printf("ERROR: [FileService] Ошибка отправки финального 'куска': %v", err)
+		state.Status = "failed"
+	} else {
+		state.Status = "completed"
+		log.Printf("INFO: [FileService] Передача файла %s завершена.", state.Metadata.Filename)
+	}
+
+	// TODO: Уведомить UI о завершении
+}
 		}
 
 		// 4. Закрываем стрим, когда все отправлено
