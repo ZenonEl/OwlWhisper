@@ -209,6 +209,7 @@ type FileData struct {
 	TransferId    string                 `protobuf:"bytes,1,opt,name=transfer_id,json=transferId,proto3" json:"transfer_id,omitempty"` // ID передачи, к которой относится этот кусок
 	ChunkData     []byte                 `protobuf:"bytes,2,opt,name=chunk_data,json=chunkData,proto3" json:"chunk_data,omitempty"`    // Сами байты "куска" файла
 	Offset        int64                  `protobuf:"varint,3,opt,name=offset,proto3" json:"offset,omitempty"`                          // Смещение этого "куска" от начала файла (для докачки)
+	LastChunk     bool                   `protobuf:"varint,4,opt,name=last_chunk,json=lastChunk,proto3" json:"last_chunk,omitempty"`   // Последний кусок
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -262,6 +263,13 @@ func (x *FileData) GetOffset() int64 {
 		return x.Offset
 	}
 	return 0
+}
+
+func (x *FileData) GetLastChunk() bool {
+	if x != nil {
+		return x.LastChunk
+	}
+	return false
 }
 
 // FileTransferStatus - Сообщение о статусе. Отправляется по основному чат-стриму.
@@ -342,13 +350,15 @@ const file_file_transfer_proto_rawDesc = "" +
 	"\tmime_type\x18\x05 \x01(\tR\bmimeType\"6\n" +
 	"\x13FileDownloadRequest\x12\x1f\n" +
 	"\vtransfer_id\x18\x01 \x01(\tR\n" +
-	"transferId\"b\n" +
+	"transferId\"\x81\x01\n" +
 	"\bFileData\x12\x1f\n" +
 	"\vtransfer_id\x18\x01 \x01(\tR\n" +
 	"transferId\x12\x1d\n" +
 	"\n" +
 	"chunk_data\x18\x02 \x01(\fR\tchunkData\x12\x16\n" +
-	"\x06offset\x18\x03 \x01(\x03R\x06offset\"\xef\x01\n" +
+	"\x06offset\x18\x03 \x01(\x03R\x06offset\x12\x1d\n" +
+	"\n" +
+	"last_chunk\x18\x04 \x01(\bR\tlastChunk\"\xef\x01\n" +
 	"\x12FileTransferStatus\x12\x1f\n" +
 	"\vtransfer_id\x18\x01 \x01(\tR\n" +
 	"transferId\x12;\n" +
