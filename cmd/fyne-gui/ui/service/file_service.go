@@ -77,6 +77,8 @@ type TransferState struct {
 	StreamID   uint64
 	Progress   float64 // от 0.0 до 1.0
 	Status     string  // "pending", "transferring", "completed", "failed"
+	pipeReader *io.PipeReader
+	pipeWriter *io.PipeWriter
 }
 
 // FileService управляет всей логикой передачи файлов.
@@ -91,9 +93,11 @@ type FileService struct {
 }
 
 func NewFileService(core newcore.ICoreController, cs *ContactService) *FileService {
+func NewFileService(core newcore.ICoreController, cs *ContactService, chs *ChatService) *FileService {
 	return &FileService{
 		core:           core,
 		contactService: cs,
+		chatService:    chs,
 		transfers:      make(map[string]*TransferState),
 	}
 }
