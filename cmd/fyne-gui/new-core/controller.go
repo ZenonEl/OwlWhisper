@@ -315,17 +315,17 @@ func (c *CoreController) handleFileTransferStream(stream network.Stream) {
 
 	peerID := stream.Conn().RemotePeer()
 
-	// Уведомляем GUI о новом стриме
+	// 1. Уведомляем GUI о новом стриме. GUI должен будет сам "связать" его с передачей.
 	c.pushEvent("NewIncomingStream", NewIncomingStreamPayload{
 		StreamID:   streamID,
 		PeerID:     peerID.String(),
 		ProtocolID: string(stream.Protocol()),
 	})
 
-	// Запускаем горутину, которая будет читать данные из этого стрима
+	// 2. Запускаем горутину, которая просто читает "куски" и пересылает их наверх.
+	// Core не знает, что это за куски - Protobuf-сообщения или что-то еще.
 	go func() {
 		defer func() {
-			// Когда чтение завершено (или оборвалось), закрываем и удаляем стрим
 			c.mu.Lock()
 			delete(c.activeStreams, streamID)
 			c.mu.Unlock()
@@ -333,8 +333,9 @@ func (c *CoreController) handleFileTransferStream(stream network.Stream) {
 			c.pushEvent("StreamClosed", StreamClosedPayload{StreamID: streamID, PeerID: peerID.String()})
 		}()
 
-		// Читаем данные "кусками" и отправляем в GUI
-		buffer := make([]byte, 65536) // 64KB buffer
+		// Просто читаем сырые байты и отправляем их как событие.
+		// GUI сам будет отвечать за их "сборку" в Protobuf-сообщения.
+		buffer := make([]byte, 65536) // 64KB
 		for {
 			n, err := stream.Read(buffer)
 			if err != nil {
@@ -343,10 +344,13 @@ func (c *CoreController) handleFileTransferStream(stream network.Stream) {
 				}
 				break
 			}
-			// Отправляем только прочитанные байты
+			// Копируем данные, чтобы избежать гонок
+			dataToSend := make([]byte, n)
+			copy(dataToSend, buffer[:n])
+
 			c.pushEvent("StreamDataReceived", StreamDataReceivedPayload{
 				StreamID: streamID,
-				Data:     buffer[:n],
+				Data:     dataToSend,
 			})
 		}
 	}()
