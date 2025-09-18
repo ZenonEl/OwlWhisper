@@ -292,6 +292,36 @@ func (fs *FileService) sendChunk(streamID uint64, chunk *protocol.FileData) erro
 	return nil
 }
 
+// HandleIncomingStream - ИЗМЕНЕНО: теперь он создает Pipe и запускает "читателя".
+func (fs *FileService) HandleIncomingStream(payload newcore.NewIncomingStreamPayload) {
+	fs.mu.Lock()
+	var state *TransferState
+	// Ищем активную входящую передачу
+	for _, s := range fs.transfers {
+		if s.IsIncoming && s.Status == "downloading" { // TODO: Более надежный поиск
+			state = s
+			break
+		}
+	}
+	if state == nil {
+		log.Printf("WARN: [FileService] Получен стрим от %s, но нет активной загрузки.", payload.PeerID)
+		fs.core.CloseStream(payload.StreamID)
+		fs.mu.Unlock()
+		return
+	}
+
+	// Создаем "трубу" для этого стрима
+	pr, pw := io.Pipe()
+	state.pipeReader = pr
+	state.pipeWriter = pw
+	state.StreamID = payload.StreamID
+	fs.mu.Unlock()
+
+	log.Printf("INFO: [FileService] Входящий стрим %d связан с файлом %s. Запуск обработчика.", payload.StreamID, state.Metadata.Filename)
+	// Запускаем горутину, которая будет читать из трубы и писать в файл
+	go fs.streamFileProcessor(state)
+}
+
 		}
 
 		// 4. Закрываем стрим, когда все отправлено
