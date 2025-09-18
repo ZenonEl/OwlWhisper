@@ -367,33 +367,101 @@ func (fs *FileService) HandleIncomingStream(payload newcore.NewIncomingStreamPay
 	log.Printf("INFO: [FileService] Входящий стрим %d связан с передачей файла %s", payload.StreamID, targetState.Metadata.Filename)
 }
 
-// HandleStreamData - вызывается из Core, когда пришли "куски" файла.
-func (fs *FileService) HandleStreamData(payload newcore.StreamDataReceivedPayload) {
-	fs.mu.RLock()
-	state, ok := fs.findTransferByStreamID(payload.StreamID)
-	fs.mu.RUnlock()
+// streamFileProcessor - КЛЮЧЕВЫЕ ИЗМЕНЕНИЯ ЗДЕСЬ
+func (fs *FileService) streamFileProcessor(state *TransferState) {
+	// Отложенное закрытие pipeWriter, чтобы гарантировать выход из цикла чтения
+	defer func() {
+		if state.pipeWriter != nil {
+			state.pipeWriter.Close()
+		}
+	}()
 
-	if !ok {
-		log.Printf("WARN: [FileService] Получены данные для неизвестного стрима %d", payload.StreamID)
-		return
-	}
+	homeDir, _ := os.UserHomeDir()
+	downloadsPath := filepath.Join(homeDir, "Downloads", "OwlWhisper")
+	os.MkdirAll(downloadsPath, 0755)
+	filePath := filepath.Join(downloadsPath, state.Metadata.Filename)
 
-	// Открываем файл для дозаписи (или создаем, если его нет)
-	// TODO: Путь к файлу должен быть безопасным (например, папка Downloads)
-	f, err := os.OpenFile(state.Metadata.Filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
-		log.Printf("ERROR: [FileService] Не удалось открыть файл для записи: %v", err)
-		return
-	}
-	defer f.Close()
-
-	if _, err := f.Write(payload.Data); err != nil {
-		log.Printf("ERROR: [FileService] Не удалось записать данные в файл: %v", err)
+		log.Printf("ERROR: [FileService] Не удалось создать файл: %v", err)
 		return
 	}
 
-	// TODO: Обновлять прогресс-бар
-	log.Printf("INFO: [FileService] Записано %d байт в файл %s", len(payload.Data), state.Metadata.Filename)
+	// Используем defer, чтобы файл гарантированно закрылся
+	defer file.Close()
+
+	streamReader := bufio.NewReader(state.pipeReader)
+
+	for {
+		msgLen, err := binary.ReadUvarint(streamReader)
+		if err != nil {
+			if err != io.EOF {
+				log.Printf("ERROR: [FileService] Ошибка чтения длины из pipe: %v", err)
+			}
+			break
+		}
+
+		msgData := make([]byte, msgLen)
+		if _, err := io.ReadFull(streamReader, msgData); err != nil {
+			log.Printf("ERROR: [FileService] Ошибка чтения 'куска' из pipe: %v", err)
+			break
+		}
+
+		chunk := &protocol.FileData{}
+		if err := proto.Unmarshal(msgData, chunk); err != nil {
+			log.Printf("ERROR: [FileService] Ошибка Unmarshal 'куска': %v", err)
+			continue
+		}
+
+		if chunk.LastChunk {
+			log.Printf("INFO: [FileService] Получен последний 'кусок' для %s. Завершение.", state.Metadata.Filename)
+			// Мы получили сигнал о конце. Выходим из цикла чтения.
+			// Проверка хеша будет после выхода из цикла.
+			break
+		}
+
+		if _, err := file.Write(chunk.ChunkData); err != nil {
+			log.Printf("ERROR: [FileService] Ошибка записи в файл: %v", err)
+			break
+		}
+	}
+
+	// --- ПРОВЕРКА ХЕША ПОСЛЕ ЗАВЕРШЕНИЯ ЦИКЛА ---
+	// Важно! file.Close() должен быть вызван до проверки хеша, чтобы
+	// все буферы были сброшены на диск. Defer идеально для этого подходит.
+	log.Printf("INFO: [FileService] Начинаем проверку хеша для файла %s", state.Metadata.Filename)
+
+	// Переоткрываем файл для чтения
+	verifyFile, err := os.Open(filePath)
+	if err != nil {
+		log.Printf("ERROR: [FileService] Не удалось переоткрыть файл для проверки хеша: %v", err)
+		state.Status = "failed"
+		return
+	}
+	defer verifyFile.Close()
+
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, verifyFile); err != nil {
+		log.Printf("ERROR: [FileService] Не удалось вычислить хеш: %v", err)
+		state.Status = "failed"
+		return
+	}
+
+	calculatedHash := fmt.Sprintf("%x", hasher.Sum(nil))
+
+	if calculatedHash == state.Metadata.HashSha256 {
+		log.Printf("SUCCESS: [FileService] Хеш файла %s совпал!", state.Metadata.Filename)
+		state.Status = "completed"
+	} else {
+		log.Printf("ERROR: [FileService] ХЕШ ФАЙЛА %s НЕ СОВПАЛ!", state.Metadata.Filename)
+		log.Printf("  -> Ожидался: %s", state.Metadata.HashSha256)
+		log.Printf("  -> Получен:   %s", calculatedHash)
+		state.Status = "failed"
+	}
+
+	// TODO: Уведомить UI о финальном статусе
+}
+
 }
 
 func (fs *FileService) findTransferByStreamID(streamID uint64) (*TransferState, bool) {
