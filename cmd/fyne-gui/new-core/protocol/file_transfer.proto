@@ -1,11 +1,9 @@
-// Создайте этот файл по пути: cmd/fyne-gui/new-core/protocol/file_transfer.proto
+// cmd/fyne-gui/new-core/protocol/file_transfer.proto
 
 syntax = "proto3";
 
 package protocol;
 
-// Укажите здесь ваш правильный путь к Go-модулю. Например:
-// option go_package = "github.com/zentfany/owlwhisper-core/internal/protocol";
 option go_package = "./";
 
 

@@ -82,6 +82,7 @@ type Envelope struct {
 	//
 	//	*Envelope_ChatMessage
 	//	*Envelope_ContactMessage
+	//	*Envelope_SignalingMessage
 	Payload       isEnvelope_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -163,6 +164,15 @@ func (x *Envelope) GetContactMessage() *ContactMessage {
 	return nil
 }
 
+func (x *Envelope) GetSignalingMessage() *SignalingMessage {
+	if x != nil {
+		if x, ok := x.Payload.(*Envelope_SignalingMessage); ok {
+			return x.SignalingMessage
+		}
+	}
+	return nil
+}
+
 type isEnvelope_Payload interface {
 	isEnvelope_Payload()
 }
@@ -175,9 +185,15 @@ type Envelope_ContactMessage struct {
 	ContactMessage *ContactMessage `protobuf:"bytes,5,opt,name=contact_message,json=contactMessage,proto3,oneof"` // Сообщение для управления контактами
 }
 
+type Envelope_SignalingMessage struct {
+	SignalingMessage *SignalingMessage `protobuf:"bytes,6,opt,name=signaling_message,json=signalingMessage,proto3,oneof"` // Сообщение для WebRTC
+}
+
 func (*Envelope_ChatMessage) isEnvelope_Payload() {}
 
 func (*Envelope_ContactMessage) isEnvelope_Payload() {}
+
+func (*Envelope_SignalingMessage) isEnvelope_Payload() {}
 
 type ChatMessage struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
@@ -793,14 +809,15 @@ var File_chat_proto protoreflect.FileDescriptor
 const file_chat_proto_rawDesc = "" +
 	"\n" +
 	"\n" +
-	"chat.proto\x12\bprotocol\x1a\x13file_transfer.proto\"\xf9\x01\n" +
+	"chat.proto\x12\bprotocol\x1a\x13file_transfer.proto\x1a\x0fsignaling.proto\"\xc4\x02\n" +
 	"\bEnvelope\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1b\n" +
 	"\tsender_id\x18\x02 \x01(\tR\bsenderId\x12%\n" +
 	"\x0etimestamp_unix\x18\x03 \x01(\x03R\rtimestampUnix\x12:\n" +
 	"\fchat_message\x18\x04 \x01(\v2\x15.protocol.ChatMessageH\x00R\vchatMessage\x12C\n" +
-	"\x0fcontact_message\x18\x05 \x01(\v2\x18.protocol.ContactMessageH\x00R\x0econtactMessageB\t\n" +
+	"\x0fcontact_message\x18\x05 \x01(\v2\x18.protocol.ContactMessageH\x00R\x0econtactMessage\x12I\n" +
+	"\x11signaling_message\x18\x06 \x01(\v2\x1a.protocol.SignalingMessageH\x00R\x10signalingMessageB\t\n" +
 	"\apayload\"\xca\x03\n" +
 	"\vChatMessage\x12;\n" +
 	"\tchat_type\x18\x01 \x01(\x0e2\x1e.protocol.ChatMessage.ChatTypeR\bchatType\x12\x17\n" +
@@ -872,32 +889,34 @@ var file_chat_proto_goTypes = []any{
 	(*ContactRequest)(nil),      // 9: protocol.ContactRequest
 	(*ContactAccept)(nil),       // 10: protocol.ContactAccept
 	nil,                         // 11: protocol.ProfileInfo.MetadataEntry
-	(*FileMetadata)(nil),        // 12: protocol.FileMetadata
-	(*FileDownloadRequest)(nil), // 13: protocol.FileDownloadRequest
-	(*FileTransferStatus)(nil),  // 14: protocol.FileTransferStatus
+	(*SignalingMessage)(nil),    // 12: protocol.SignalingMessage
+	(*FileMetadata)(nil),        // 13: protocol.FileMetadata
+	(*FileDownloadRequest)(nil), // 14: protocol.FileDownloadRequest
+	(*FileTransferStatus)(nil),  // 15: protocol.FileTransferStatus
 }
 var file_chat_proto_depIdxs = []int32{
 	2,  // 0: protocol.Envelope.chat_message:type_name -> protocol.ChatMessage
 	5,  // 1: protocol.Envelope.contact_message:type_name -> protocol.ContactMessage
-	0,  // 2: protocol.ChatMessage.chat_type:type_name -> protocol.ChatMessage.ChatType
-	3,  // 3: protocol.ChatMessage.text:type_name -> protocol.TextMessage
-	12, // 4: protocol.ChatMessage.file_announcement:type_name -> protocol.FileMetadata
-	13, // 5: protocol.ChatMessage.file_request:type_name -> protocol.FileDownloadRequest
-	14, // 6: protocol.ChatMessage.file_status:type_name -> protocol.FileTransferStatus
-	4,  // 7: protocol.ChatMessage.read_receipts:type_name -> protocol.ReadReceipts
-	7,  // 8: protocol.ContactMessage.profile_request:type_name -> protocol.ProfileRequest
-	8,  // 9: protocol.ContactMessage.profile_response:type_name -> protocol.ProfileResponse
-	9,  // 10: protocol.ContactMessage.contact_request:type_name -> protocol.ContactRequest
-	10, // 11: protocol.ContactMessage.contact_accept:type_name -> protocol.ContactAccept
-	11, // 12: protocol.ProfileInfo.metadata:type_name -> protocol.ProfileInfo.MetadataEntry
-	6,  // 13: protocol.ProfileResponse.profile:type_name -> protocol.ProfileInfo
-	6,  // 14: protocol.ContactRequest.sender_profile:type_name -> protocol.ProfileInfo
-	6,  // 15: protocol.ContactAccept.sender_profile:type_name -> protocol.ProfileInfo
-	16, // [16:16] is the sub-list for method output_type
-	16, // [16:16] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	12, // 2: protocol.Envelope.signaling_message:type_name -> protocol.SignalingMessage
+	0,  // 3: protocol.ChatMessage.chat_type:type_name -> protocol.ChatMessage.ChatType
+	3,  // 4: protocol.ChatMessage.text:type_name -> protocol.TextMessage
+	13, // 5: protocol.ChatMessage.file_announcement:type_name -> protocol.FileMetadata
+	14, // 6: protocol.ChatMessage.file_request:type_name -> protocol.FileDownloadRequest
+	15, // 7: protocol.ChatMessage.file_status:type_name -> protocol.FileTransferStatus
+	4,  // 8: protocol.ChatMessage.read_receipts:type_name -> protocol.ReadReceipts
+	7,  // 9: protocol.ContactMessage.profile_request:type_name -> protocol.ProfileRequest
+	8,  // 10: protocol.ContactMessage.profile_response:type_name -> protocol.ProfileResponse
+	9,  // 11: protocol.ContactMessage.contact_request:type_name -> protocol.ContactRequest
+	10, // 12: protocol.ContactMessage.contact_accept:type_name -> protocol.ContactAccept
+	11, // 13: protocol.ProfileInfo.metadata:type_name -> protocol.ProfileInfo.MetadataEntry
+	6,  // 14: protocol.ProfileResponse.profile:type_name -> protocol.ProfileInfo
+	6,  // 15: protocol.ContactRequest.sender_profile:type_name -> protocol.ProfileInfo
+	6,  // 16: protocol.ContactAccept.sender_profile:type_name -> protocol.ProfileInfo
+	17, // [17:17] is the sub-list for method output_type
+	17, // [17:17] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_chat_proto_init() }
@@ -906,9 +925,11 @@ func file_chat_proto_init() {
 		return
 	}
 	file_file_transfer_proto_init()
+	file_signaling_proto_init()
 	file_chat_proto_msgTypes[0].OneofWrappers = []any{
 		(*Envelope_ChatMessage)(nil),
 		(*Envelope_ContactMessage)(nil),
+		(*Envelope_SignalingMessage)(nil),
 	}
 	file_chat_proto_msgTypes[1].OneofWrappers = []any{
 		(*ChatMessage_Text)(nil),

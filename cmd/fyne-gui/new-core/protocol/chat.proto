@@ -3,9 +3,8 @@ syntax = "proto3";
 package protocol;
 import "file_transfer.proto";
 
-// Укажите здесь ваш правильный путь к Go-модулю. Например:
-// option go_package = "github.com/zentfany/owlwhisper-core/internal/protocol";
 option go_package = "./";
+import "signaling.proto";
 
 // ---------------------------------------------------------------- //
 // ----------------- ОСНОВНОЙ "КОНВЕРТ" ----------------- //
@@ -24,6 +23,7 @@ message Envelope {
     oneof payload {
         ChatMessage chat_message = 4;      // Сообщение, относящееся к чату
         ContactMessage contact_message = 5; // Сообщение для управления контактами
+        SignalingMessage signaling_message = 6; // Сообщение для WebRTC
     }
 }
 
