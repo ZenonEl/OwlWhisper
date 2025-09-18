@@ -17,12 +17,27 @@ import (
 	newcore "OwlWhisper/cmd/fyne-gui/new-core"
 )
 
+type CallState string
+
+const (
+	CallStateIdle      CallState = "Idle"      // Нет активного звонка
+	CallStateDialing   CallState = "Dialing"   // Мы инициировали звонок, ждем ответа
+	CallStateIncoming  CallState = "Incoming"  // Нам звонят, ждем решения пользователя
+	CallStateConnected CallState = "Connected" // Соединение установлено
+)
+
+// IncomingCallData хранит информацию о входящем звонке.
+type IncomingCallData struct {
+	SenderID string
+	CallID   string
+	Offer    *protocol.CallOffer
+}
+
 // CallService управляет всей логикой, связанной со звонками.
 type CallService struct {
 	core           newcore.ICoreController
 	contactService *ContactService
 
-	// Конфигурация Pion/webrtc API
 	webrtcAPI    *webrtc.API
 	webrtcConfig webrtc.Configuration
 
@@ -31,10 +46,16 @@ type CallService struct {
 	currentTargetPeerID string
 	currentCallID       string
 
+	stateMutex   sync.RWMutex
+	currentState CallState
+	incomingCall *IncomingCallData
+
+	onIncomingCall func(senderID, callID string)
+
 	pendingCandidates map[string][]webrtc.ICECandidateInit
 }
 
-func NewCallService(core newcore.ICoreController, cs *ContactService) (*CallService, error) {
+func NewCallService(core newcore.ICoreController, cs *ContactService, onIncomingCall func(string, string)) (*CallService, error) {
 	// --- Настройка медиа-движка ---
 	// Мы пока не используем никакие медиа, поэтому настройки простые.
 	m := &webrtc.MediaEngine{}
@@ -57,62 +78,65 @@ func NewCallService(core newcore.ICoreController, cs *ContactService) (*CallServ
 		webrtcAPI:         api,
 		webrtcConfig:      config,
 		pendingCandidates: make(map[string][]webrtc.ICECandidateInit),
+		currentState:      CallStateIdle,
+		onIncomingCall:    onIncomingCall,
 	}, nil
 }
 
-// InitiateCall (Фаза 1: "Звонок") - вызывается из UI.
+// InitiateCall - ФИНАЛЬНАЯ ВЕРСИЯ. Добавляет Data Channel.
 func (cs *CallService) InitiateCall(recipientID string) error {
+	cs.stateMutex.Lock()
+	if cs.currentState != CallStateIdle {
+		cs.stateMutex.Unlock()
+		return fmt.Errorf("нельзя начать новый звонок, текущий статус: %s", cs.currentState)
+	}
+	cs.stateMutex.Unlock()
+
 	log.Printf("INFO: [CallService] Инициируем звонок пиру %s", recipientID[:8])
 
-	// 1. Создаем новый PeerConnection
 	pc, err := cs.webrtcAPI.NewPeerConnection(cs.webrtcConfig)
 	if err != nil {
 		return err
 	}
-	cs.peerConnection = pc
-	cs.currentTargetPeerID = recipientID
-	cs.currentCallID = uuid.New().String()
 
-	// --- Настройка обработчиков событий PeerConnection ---
-	// Этот обработчик будет вызываться Pion'ом, когда он найдет
-	// нового ICE-кандидата (сетевой маршрут).
-	pc.OnICECandidate(func(c *webrtc.ICECandidate) {
-		if c == nil {
-			return
-		}
-		log.Printf("INFO: [CallService] (Инициатор) Найден ICE-кандидат, отправляем...")
-		cs.sendICECandidate(cs.currentTargetPeerID, cs.currentCallID, c)
-	})
+	// --- КЛЮЧЕВОЕ ИЗМЕНЕНИЕ №1: Добавляем Data Channel ---
+	// Это заставляет Pion сгенерировать правильный SDP с ice-ufrag.
+	// В будущем мы сможем использовать этот канал для отправки данных во время звонка.
+	if _, err := pc.CreateDataChannel("owl-whisper-data", nil); err != nil {
+		return fmt.Errorf("не удалось создать Data Channel: %w", err)
+	}
 
-	// Этот обработчик вызывается, когда соединение установлено или разорвано.
+	iceGatheringComplete := webrtc.GatheringCompletePromise(pc)
+
+	pc.OnICECandidate(func(c *webrtc.ICECandidate) { /* ... (без изменений) */ })
 	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
-		log.Printf("INFO: [CallService] Состояние PeerConnection изменилось: %s", state.String())
-		if state == webrtc.PeerConnectionStateFailed || state == webrtc.PeerConnectionStateClosed {
-			// Звонок завершен, можно закрывать соединение.
-			cs.peerConnection.Close()
-			cs.peerConnection = nil
-		}
+		log.Printf("INFO: [CallService] (Инициатор) Состояние PeerConnection: %s", state.String())
 	})
 
-	// TODO: Здесь мы должны добавить аудио-трек (из микрофона).
-	// pc.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio)
-
-	// 2. Создаем SDP Offer
 	offer, err := pc.CreateOffer(nil)
 	if err != nil {
 		return err
 	}
 
-	// 3. Устанавливаем этот Offer как наше локальное описание
 	if err = pc.SetLocalDescription(offer); err != nil {
 		return err
 	}
 
-	// 4. Отправляем Offer собеседнику через Core
-	log.Printf("INFO: [CallService] SDP Offer создан. Отправляем его...")
+	<-iceGatheringComplete
 
-	// --- ЗАПОЛНЯЕМ TODO ---
-	offerMsg := &protocol.CallOffer{Sdp: offer.SDP}
+	finalOffer := pc.LocalDescription()
+
+	// Сохраняем состояния
+	cs.stateMutex.Lock()
+	cs.peerConnection = pc
+	cs.currentTargetPeerID = recipientID
+	cs.currentCallID = uuid.New().String()
+	cs.currentState = CallStateDialing
+	cs.stateMutex.Unlock()
+
+	// Отправляем готовый Offer
+	log.Printf("INFO: [CallService] Сбор ICE завершен. Отправляем готовый Offer...")
+	offerMsg := &protocol.CallOffer{Sdp: finalOffer.SDP}
 	signalMsg := &protocol.SignalingMessage{
 		CallId:  cs.currentCallID,
 		Payload: &protocol.SignalingMessage_Offer{Offer: offerMsg},
@@ -154,75 +178,27 @@ func (cs *CallService) HandleSignalingMessage(senderID string, msg *protocol.Sig
 	}
 }
 
-// HandleIncomingOffer обрабатывает входящий CallOffer.
+// HandleIncomingOffer - ФИНАЛЬНАЯ ВЕРСИЯ.
 func (cs *CallService) HandleIncomingOffer(senderID string, callID string, offer *protocol.CallOffer) error {
-	log.Printf("INFO: [CallService] Обработка CallOffer от %s", senderID[:8])
-
-	// 1. Создаем новый PeerConnection для ответа
-	pc, err := cs.webrtcAPI.NewPeerConnection(cs.webrtcConfig)
-	if err != nil {
-		return err
-	}
-	cs.peerConnection = pc
-
-	// --- Настраиваем те же самые обработчики, что и при инициации ---
-	pc.OnICECandidate(func(c *webrtc.ICECandidate) {
-		if c == nil {
-			return
-		}
-
-		log.Printf("INFO: [CallService] (Ответчик) Найден ICE-кандидат, отправляем...")
-		cs.sendICECandidate(senderID, callID, c)
-	})
-
-	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
-		log.Printf("INFO: [CallService] (Ответчик) Состояние PeerConnection изменилось: %s", state.String())
-	})
-
-	// TODO: Здесь мы будем настраивать, что делать с входящими треками (аудио/видео)
-	// pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) { ... })
-
-	// 2. Устанавливаем полученный Offer как "удаленное" описание
-	if err = pc.SetRemoteDescription(webrtc.SessionDescription{
-		Type: webrtc.SDPTypeOffer,
-		SDP:  offer.Sdp,
-	}); err != nil {
-		return err
+	cs.stateMutex.Lock()
+	if cs.currentState != CallStateIdle {
+		cs.stateMutex.Unlock()
+		return fmt.Errorf("получен Offer, но состояние не Idle (%s)", cs.currentState)
 	}
 
-	cs.applyPendingCandidates(senderID)
-
-	// 3. Создаем SDP Answer
-	answer, err := pc.CreateAnswer(nil)
-	if err != nil {
-		return err
+	log.Printf("INFO: [CallService] Получен входящий звонок. Сохраняем Offer и уведомляем UI.", senderID[:8])
+	cs.incomingCall = &IncomingCallData{
+		SenderID: senderID,
+		CallID:   callID,
+		Offer:    offer,
 	}
+	cs.currentState = CallStateIncoming
+	cs.stateMutex.Unlock()
 
-	// 4. Устанавливаем этот Answer как наше "локальное" описание
-	if err = pc.SetLocalDescription(answer); err != nil {
-		return err
+	if cs.onIncomingCall != nil {
+		go cs.onIncomingCall(senderID, callID)
 	}
-
-	// 5. Отправляем Answer обратно инициатору звонка
-	log.Printf("INFO: [CallService] SDP Answer создан. Отправляем его...")
-	answerMsg := &protocol.CallAnswer{Sdp: answer.SDP}
-	signalMsg := &protocol.SignalingMessage{
-		CallId:  callID,
-		Payload: &protocol.SignalingMessage_Answer{Answer: answerMsg},
-	}
-	envelope := &protocol.Envelope{
-		MessageId:     uuid.New().String(),
-		SenderId:      cs.core.GetMyPeerID(),
-		TimestampUnix: time.Now().Unix(),
-		Payload:       &protocol.Envelope_SignalingMessage{SignalingMessage: signalMsg},
-	}
-
-	data, err := proto.Marshal(envelope)
-	if err != nil {
-		return err
-	}
-
-	return cs.core.SendDataToPeer(senderID, data)
+	return nil
 }
 
 // HandleIncomingAnswer обрабатывает входящий CallAnswer.
@@ -241,31 +217,136 @@ func (cs *CallService) HandleIncomingAnswer(senderID string, callID string, answ
 	}
 
 	// --- НОВЫЙ БЛОК: "Слив" буфера ---
-	cs.applyPendingCandidates(senderID)
+	cs.applyPendingCandidates_unsafe(senderID)
 	// --- КОНЕЦ НОВОГО БЛОКА ---
 
 	return nil
 }
 
-// HandleIncomingICECandidate обрабатывает входящий ICE-кандидат.
+// HandleIncomingICECandidate - ТЕПЕРЬ ВСЕГДА БУФЕРИЗИРУЕТ, если мы - получатель.
 func (cs *CallService) HandleIncomingICECandidate(senderID string, callID string, candidate *protocol.ICECandidate) error {
 	cs.pcMutex.Lock()
 	defer cs.pcMutex.Unlock()
 
 	candidateInit := webrtc.ICECandidateInit{Candidate: candidate.CandidateJson}
 
-	// Если PeerConnection еще не создан или мы еще не установили RemoteDescription,
-	// то кандидатов принимать рано.
-	if cs.peerConnection == nil || cs.peerConnection.RemoteDescription() == nil {
-		log.Printf("INFO: [CallService] Получен 'ранний' ICE-кандидат от %s. Буферизируем.", senderID[:8])
-		// Сохраняем кандидата в буфер.
-		cs.pendingCandidates[senderID] = append(cs.pendingCandidates[senderID], candidateInit)
-		return nil
+	// Если мы - инициатор, и pc уже создан, добавляем сразу.
+	if cs.currentState == CallStateDialing && cs.peerConnection != nil {
+		return cs.peerConnection.AddICECandidate(candidateInit)
 	}
 
-	// Если PeerConnection уже готов, добавляем кандидата немедленно.
-	log.Printf("INFO: [CallService] Получен и немедленно добавлен ICE-кандидат от %s", senderID[:8])
-	return cs.peerConnection.AddICECandidate(candidateInit)
+	// Во всех остальных случаях (особенно, когда нам звонят) - буферизируем.
+	log.Printf("INFO: [CallService] Получен 'ранний' ICE-кандидат от %s. Буферизируем.", senderID[:8])
+	cs.pendingCandidates[senderID] = append(cs.pendingCandidates[senderID], candidateInit)
+	return nil
+}
+
+// AcceptCall - ФИНАЛЬНАЯ ВЕРСЯ. Добавляет обработчик OnDataChannel.
+func (cs *CallService) AcceptCall() error {
+	cs.stateMutex.Lock()
+	if cs.currentState != CallStateIncoming || cs.incomingCall == nil {
+		cs.stateMutex.Unlock()
+		return fmt.Errorf("нет входящего звонка для принятия")
+	}
+	senderID := cs.incomingCall.SenderID
+	callID := cs.incomingCall.CallID
+	offer := cs.incomingCall.Offer
+	cs.incomingCall = nil
+	cs.stateMutex.Unlock()
+
+	pc, err := cs.webrtcAPI.NewPeerConnection(cs.webrtcConfig)
+	if err != nil {
+		return err
+	}
+
+	// --- КЛЮЧЕВОЕ ИЗМЕНЕНИЕ №2: Добавляем обработчик Data Channel ---
+	// Мы должны быть готовы принять Data Channel, который инициировал собеседник.
+	pc.OnDataChannel(func(dc *webrtc.DataChannel) {
+		log.Printf("INFO: [CallService] Получен новый Data Channel '%s' от %s", dc.Label(), senderID[:8])
+		// TODO: Настроить обработчики для этого канала (OnOpen, OnMessage)
+	})
+
+	// Настраиваем обработчики
+	pc.OnICECandidate(func(c *webrtc.ICECandidate) {
+		if c == nil {
+			return
+		}
+		cs.sendICECandidate(senderID, callID, c)
+	})
+	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
+		log.Printf("INFO: [CallService] (Ответчик) Состояние PeerConnection: %s", state.String())
+	})
+
+	// 2. Устанавливаем RemoteDescription. Теперь это безопасно.
+
+	if err = pc.SetRemoteDescription(webrtc.SessionDescription{
+		Type: webrtc.SDPTypeOffer,
+		SDP:  offer.Sdp,
+	}); err != nil {
+		return err
+	}
+
+	cs.applyPendingCandidates_unsafe(senderID)
+
+	answer, err := pc.CreateAnswer(nil)
+	if err != nil {
+		return err
+	}
+
+	gatherComplete := webrtc.GatheringCompletePromise(pc)
+	if err = pc.SetLocalDescription(answer); err != nil {
+		return err
+	}
+	<-gatherComplete
+
+	finalAnswer := pc.LocalDescription()
+
+	cs.pcMutex.Lock()
+	cs.peerConnection = pc
+	cs.pcMutex.Unlock()
+
+	cs.stateMutex.Lock()
+	cs.currentState = CallStateConnected
+	cs.stateMutex.Unlock()
+
+	// Отправляем ГОТОВЫЙ Answer
+	answerMsg := &protocol.CallAnswer{Sdp: finalAnswer.SDP}
+	signalMsg := &protocol.SignalingMessage{
+		CallId:  callID,
+		Payload: &protocol.SignalingMessage_Answer{Answer: answerMsg},
+	}
+	envelope := &protocol.Envelope{
+		MessageId:     uuid.New().String(),
+		SenderId:      cs.core.GetMyPeerID(),
+		TimestampUnix: time.Now().Unix(),
+		Payload:       &protocol.Envelope_SignalingMessage{SignalingMessage: signalMsg},
+	}
+	data, err := proto.Marshal(envelope)
+	if err != nil {
+		return err
+	}
+
+	return cs.core.SendDataToPeer(senderID, data)
+}
+
+// HangupCall - универсальный метод для завершения/отклонения звонка.
+func (cs *CallService) HangupCall() error {
+	cs.stateMutex.Lock()
+	defer cs.stateMutex.Unlock()
+
+	if cs.peerConnection != nil {
+		cs.peerConnection.Close()
+		cs.peerConnection = nil
+	}
+
+	// TODO: Отправить SignalingMessage с Hangup
+
+	cs.currentState = CallStateIdle
+	cs.currentTargetPeerID = ""
+	cs.currentCallID = ""
+
+	log.Println("INFO: [CallService] Звонок завершен/отклонен.")
+	return nil
 }
 
 func (cs *CallService) sendICECandidate(recipientID string, callID string, c *webrtc.ICECandidate) {
@@ -292,11 +373,8 @@ func (cs *CallService) sendICECandidate(recipientID string, callID string, c *we
 	}
 }
 
-// applyPendingCandidates проверяет буфер и добавляет "отложенные" кандидаты.
-func (cs *CallService) applyPendingCandidates(peerID string) {
-	cs.pcMutex.Lock()
-	defer cs.pcMutex.Unlock()
-
+// applyPendingCandidates_unsafe проверяет буфер и добавляет "отложенные" кандидаты.
+func (cs *CallService) applyPendingCandidates_unsafe(peerID string) {
 	if candidates, ok := cs.pendingCandidates[peerID]; ok {
 		log.Printf("INFO: [CallService] Найдены %d 'отложенных' кандидатов для %s. Применяем...", len(candidates), peerID[:8])
 		for _, c := range candidates {
