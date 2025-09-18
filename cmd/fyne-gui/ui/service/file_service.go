@@ -266,6 +266,32 @@ func (fs *FileService) streamFileSender(state *TransferState, recipientID string
 
 	// TODO: Уведомить UI о завершении
 }
+
+// sendChunk - helper-функция для упаковки и отправки одного Protobuf-сообщения FileData.
+func (fs *FileService) sendChunk(streamID uint64, chunk *protocol.FileData) error {
+	// Сериализуем Protobuf-сообщение в байты
+	data, err := proto.Marshal(chunk)
+	if err != nil {
+		return fmt.Errorf("ошибка Marshal 'куска': %w", err)
+	}
+
+	// Создаем префикс с длиной сообщения (Varint)
+	// Это стандартный способ кадрирования (framing) в libp2p.
+	sizePrefix := make([]byte, binary.MaxVarintLen64)
+	bytesWritten := binary.PutUvarint(sizePrefix, uint64(len(data)))
+
+	// Отправляем сначала длину...
+	if err := fs.core.WriteToStream(streamID, sizePrefix[:bytesWritten]); err != nil {
+		return fmt.Errorf("ошибка отправки префикса длины: %w", err)
+	}
+
+	// ...потом само сообщение.
+	if err := fs.core.WriteToStream(streamID, data); err != nil {
+		return fmt.Errorf("ошибка отправки данных 'куска': %w", err)
+	}
+	return nil
+}
+
 		}
 
 		// 4. Закрываем стрим, когда все отправлено
