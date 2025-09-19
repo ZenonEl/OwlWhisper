@@ -121,7 +121,7 @@ func NewCallService(core newcore.ICoreController, cs *ContactService, onIncoming
 		malgoCtx:              malgoCtx,
 		opusDecoder:           decoder,
 		opusEncoder:           encoder,
-		playbackBuffer:        NewJitterBuffer(pcmSizeBytes, 10),
+		playbackBuffer:        NewJitterBuffer(pcmSizeBytes, 50),
 		captureBuffer:         new(bytes.Buffer),
 		playbackStagingBuffer: new(bytes.Buffer),
 	}, nil
@@ -402,6 +402,23 @@ func (cs *CallService) startAudioDevice() error {
 						// log.Printf("WARN: Ошибка записи аудио-сэмпла: %v", err)
 					}
 				}
+				requestedBytes := len(output)
+				for cs.playbackStagingBuffer.Len() < requestedBytes {
+					networkPacket := make([]byte, pcmSizeBytes)
+
+					// --- ДОБАВЬТЕ ЛОГ ЗДЕСЬ ---
+					bytesRead, err := cs.playbackBuffer.Read(networkPacket)
+					if err != nil {
+						// Этот лог покажет, если буфер постоянно пуст
+						log.Printf("DEBUG: Ошибка чтения из Jitter-буфера: %v", err)
+						break
+					}
+					log.Printf("DEBUG: Прочитано из Jitter-буфера: %d байт", bytesRead)
+					// --- КОНЕЦ ---
+
+					cs.playbackStagingBuffer.Write(networkPacket)
+				}
+				cs.playbackStagingBuffer.Read(output)
 			}
 		},
 	}
@@ -453,16 +470,31 @@ func (cs *CallService) playRemoteTrack(remoteTrack *webrtc.TrackRemote) {
 			return
 		}
 
+		log.Printf("DEBUG: Получен RTP пакет, размер полезной нагрузки: %d", len(rtpPacket.Payload))
+
 		if _, err := cs.opusDecoder.Decode(rtpPacket.Payload, pcm); err != nil {
 			log.Printf("WARN: Ошибка декодирования Opus: %v", err)
 			continue
 		}
 
+		var pcmSum int64 = 0
+		for _, sample := range pcm {
+			if sample < 0 {
+				pcmSum -= int64(sample)
+			} else {
+				pcmSum += int64(sample)
+			}
+		}
+		log.Printf("DEBUG: Фрейм декодирован, сумма семплов: %d", pcmSum)
+
 		pcmBytes := make([]byte, len(pcm)*2)
 		for i, s := range pcm {
-			pcmBytes[2*i] = byte(s)
-			pcmBytes[2*i+1] = byte(s >> 8)
+			// Конвертируем []int16 в []byte
+			binary.LittleEndian.PutUint16(pcmBytes[i*2:], uint16(s))
 		}
+
+		// --- ВОТ ОНО! УСИЛИВАЕМ ЗВУК ПЕРЕД ЗАПИСЬЮ В БУФЕР ---
+		amplify(pcmBytes, 20.0) // 20.0 - это коэффициент усиления, можно подобрать
 
 		if _, err := cs.playbackBuffer.Write(pcmBytes); err != nil {
 			// log.Printf("WARN: Ошибка записи в Jitter Buffer: %v", err)
@@ -616,5 +648,29 @@ func (jb *JitterBuffer) Reset() {
 	// Drain the channel
 	for len(jb.packets) > 0 {
 		<-jb.packets
+	}
+}
+
+// amplify программно увеличивает громкость PCM-сигнала.
+// factor - коэффициент усиления (например, 20.0).
+func amplify(pcmData []byte, factor float32) {
+	if factor == 1.0 {
+		return // Усиливать не нужно
+	}
+
+	for i := 0; i < len(pcmData); i += 2 {
+		// Читаем 16-битный семпл (little-endian)
+		sample := int16(binary.LittleEndian.Uint16(pcmData[i : i+2]))
+
+		// Усиливаем и применяем ограничение (clipping), чтобы избежать искажений
+		amplifiedSample := float32(sample) * factor
+		if amplifiedSample > 32767 {
+			amplifiedSample = 32767
+		} else if amplifiedSample < -32768 {
+			amplifiedSample = -32768
+		}
+
+		// Записываем усиленный семпл обратно в срез байт
+		binary.LittleEndian.PutUint16(pcmData[i:i+2], uint16(int16(amplifiedSample)))
 	}
 }
