@@ -121,7 +121,7 @@ func NewCallService(core newcore.ICoreController, cs *ContactService, onIncoming
 		malgoCtx:              malgoCtx,
 		opusDecoder:           decoder,
 		opusEncoder:           encoder,
-		playbackBuffer:        NewJitterBuffer(pcmSizeBytes, 50),
+		playbackBuffer:        NewJitterBuffer(pcmSizeBytes, 1000),
 		captureBuffer:         new(bytes.Buffer),
 		playbackStagingBuffer: new(bytes.Buffer),
 	}, nil
@@ -494,7 +494,7 @@ func (cs *CallService) playRemoteTrack(remoteTrack *webrtc.TrackRemote) {
 		}
 
 		// --- ВОТ ОНО! УСИЛИВАЕМ ЗВУК ПЕРЕД ЗАПИСЬЮ В БУФЕР ---
-		amplify(pcmBytes, 20.0) // 20.0 - это коэффициент усиления, можно подобрать
+		amplify(pcmBytes, 10.0) // 20.0 - это коэффициент усиления, можно подобрать
 
 		if _, err := cs.playbackBuffer.Write(pcmBytes); err != nil {
 			// log.Printf("WARN: Ошибка записи в Jitter Buffer: %v", err)
