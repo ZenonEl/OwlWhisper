@@ -21,8 +21,6 @@ import (
 	// Импортируем все необходимые транспорты
 	quic "github.com/libp2p/go-libp2p/p2p/transport/quic"
 	tcp "github.com/libp2p/go-libp2p/p2p/transport/tcp"
-	webrtc "github.com/libp2p/go-libp2p/p2p/transport/webrtc"
-	ws "github.com/libp2p/go-libp2p/p2p/transport/websocket"
 )
 
 // Node представляет собой полностью инкапсулированный узел libp2p.
@@ -43,6 +41,7 @@ func NewNode(ctx context.Context, privKey crypto.PrivKey, cfg Config) (*Node, er
 		// Безопасность: включаем и TLS, и Noise для максимальной совместимости
 		libp2p.Security(noise.ID, noise.New),
 		libp2p.Security(tls.ID, tls.New),
+		libp2p.NoTransports,
 	}
 
 	// 2. Динамически добавляем транспорты на основе конфигурации
@@ -51,12 +50,6 @@ func NewNode(ctx context.Context, privKey crypto.PrivKey, cfg Config) (*Node, er
 	}
 	if cfg.EnableQUIC {
 		opts = append(opts, libp2p.Transport(quic.NewTransport))
-	}
-	if cfg.EnableWebSocket {
-		opts = append(opts, libp2p.Transport(ws.New))
-	}
-	if cfg.EnableWebRTC {
-		opts = append(opts, libp2p.Transport(webrtc.New))
 	}
 
 	// 3. Динамически добавляем механизмы обхода NAT
