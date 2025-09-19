@@ -3,6 +3,7 @@
 package services
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -10,36 +11,32 @@ import (
 	"sync"
 	"time"
 
+	newcore "OwlWhisper/cmd/fyne-gui/new-core"
 	protocol "OwlWhisper/cmd/fyne-gui/new-core/protocol"
 
-	"github.com/ebitengine/oto/v3"
+	"github.com/gen2brain/malgo"
 	"github.com/google/uuid"
-	"github.com/gordonklaus/portaudio"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
-	"github.com/pion/webrtc/v4/pkg/media/oggwriter"
 	"google.golang.org/protobuf/proto"
-
-	newcore "OwlWhisper/cmd/fyne-gui/new-core"
+	opus "gopkg.in/hraban/opus.v2"
 )
 
 type CallState string
 
 const (
-	CallStateIdle      CallState = "Idle"      // Нет активного звонка
-	CallStateDialing   CallState = "Dialing"   // Мы инициировали звонок, ждем ответа
-	CallStateIncoming  CallState = "Incoming"  // Нам звонят, ждем решения пользователя
-	CallStateConnected CallState = "Connected" // Соединение установлено
+	CallStateIdle      CallState = "Idle"
+	CallStateDialing   CallState = "Dialing"
+	CallStateIncoming  CallState = "Incoming"
+	CallStateConnected CallState = "Connected"
 )
 
-// IncomingCallData хранит информацию о входящем звонке.
 type IncomingCallData struct {
 	SenderID string
 	CallID   string
 	Offer    *protocol.CallOffer
 }
 
-// CallService управляет всей логикой, связанной со звонками.
 type CallService struct {
 	core           newcore.ICoreController
 	contactService *ContactService
@@ -56,48 +53,81 @@ type CallService struct {
 	currentState CallState
 	incomingCall *IncomingCallData
 
+	malgoCtx              *malgo.AllocatedContext
+	audioDevice           *malgo.Device
+	localTrack            *webrtc.TrackLocalStaticSample
+	opusEncoder           *opus.Encoder
+	opusDecoder           *opus.Decoder // Декодер нужен для входящего звука
+	playbackBuffer        *JitterBuffer
+	captureBuffer         *bytes.Buffer
+	playbackStagingBuffer *bytes.Buffer
+
 	onIncomingCall func(senderID, callID string)
 
 	pendingCandidates map[string][]webrtc.ICECandidateInit
 }
 
-func NewCallService(core newcore.ICoreController, cs *ContactService, onIncomingCall func(string, string)) (*CallService, error) {
-	// --- ИСПРАВЛЕНИЕ: ЯВНАЯ РЕГИСТРАЦИЯ КОДЕКОВ ---
-	m := &webrtc.MediaEngine{}
+const (
+	sampleRate   = 48000
+	channels     = 1
+	frameSize    = 960 // 20ms at 48kHz
+	pcmSizeBytes = frameSize * channels * 2
+)
 
-	// Говорим Pion, что мы поддерживаем аудио-кодек Opus.
-	// Это стандарт для WebRTC, он обеспечивает высокое качество.
+func NewCallService(core newcore.ICoreController, cs *ContactService, onIncomingCall func(string, string)) (*CallService, error) {
+	m := &webrtc.MediaEngine{}
 	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
-		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2, SDPFmtpLine: "minptime=10;useinbandfec=1"},
+		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 1, SDPFmtpLine: "minptime=10;useinbandfec=1"},
 		PayloadType:        111,
 	}, webrtc.RTPCodecTypeAudio); err != nil {
 		return nil, err
 	}
 
-	// TODO: В будущем, для видео, мы добавим сюда регистрацию видео-кодеков (VP8, H264).
-	// if err := m.RegisterCodec(webrtc.RTPCodecParameters{ ... }); err != nil { ... }
+	se := webrtc.SettingEngine{}
+	se.SetReceiveMTU(0)
 
-	// Создаем API Pion с этим настроенным движком
-	api := webrtc.NewAPI(webrtc.WithMediaEngine(m))
+	api := webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithSettingEngine(se))
 
 	config := webrtc.Configuration{
-		ICEServers: []webrtc.ICEServer{
-			{URLs: []string{"stun:stun.l.google.com:19302"}},
-		},
+		ICEServers: []webrtc.ICEServer{{URLs: []string{"stun:stun.l.google.com:19302"}}},
+	}
+
+	malgoCtx, err := malgo.InitContext(nil, malgo.ContextConfig{}, func(msg string) { log.Printf("MALGO: %s", msg) })
+	if err != nil {
+		return nil, fmt.Errorf("ошибка инициализации malgo context: %w", err)
+	}
+
+	decoder, err := opus.NewDecoder(sampleRate, channels)
+	if err != nil {
+		malgoCtx.Uninit()
+		malgoCtx.Free()
+		return nil, fmt.Errorf("ошибка создания Opus-декодера: %w", err)
+	}
+	encoder, err := opus.NewEncoder(sampleRate, channels, opus.AppVoIP)
+	if err != nil {
+		malgoCtx.Uninit()
+		malgoCtx.Free()
+		return nil, fmt.Errorf("ошибка создания Opus-кодера: %w", err)
 	}
 
 	return &CallService{
-		core:              core,
-		contactService:    cs,
-		webrtcAPI:         api,
-		webrtcConfig:      config,
-		pendingCandidates: make(map[string][]webrtc.ICECandidateInit),
-		currentState:      CallStateIdle,
-		onIncomingCall:    onIncomingCall,
+		core:                  core,
+		contactService:        cs,
+		webrtcAPI:             api,
+		webrtcConfig:          config,
+		pendingCandidates:     make(map[string][]webrtc.ICECandidateInit),
+		currentState:          CallStateIdle,
+		onIncomingCall:        onIncomingCall,
+		malgoCtx:              malgoCtx,
+		opusDecoder:           decoder,
+		opusEncoder:           encoder,
+		playbackBuffer:        NewJitterBuffer(pcmSizeBytes, 10),
+		captureBuffer:         new(bytes.Buffer),
+		playbackStagingBuffer: new(bytes.Buffer),
 	}, nil
 }
 
-// InitiateCall - ФИНАЛЬНАЯ ВЕРСИЯ. Добавляет Data Channel.
+// InitiateCall - ИСПРАВЛЕННАЯ ВЕРСИЯ
 func (cs *CallService) InitiateCall(recipientID string) error {
 	cs.stateMutex.Lock()
 	if cs.currentState != CallStateIdle {
@@ -113,171 +143,94 @@ func (cs *CallService) InitiateCall(recipientID string) error {
 		return err
 	}
 
-	audioTrack, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus}, "audio", "pion")
+	// 1. Создаем локальный аудио-трек, в который будем писать PCM-данные
+	audioTrack, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 1}, "audio", "pion")
 	if err != nil {
+		pc.Close()
+		return err
+	}
+	cs.localTrack = audioTrack
+
+	// 2. Добавляем трек в PeerConnection ОДИН РАЗ
+	if _, err := pc.AddTrack(audioTrack); err != nil {
+		pc.Close()
 		return err
 	}
 
-	rtpSender, err := pc.AddTrack(audioTrack)
-	if err != nil {
+	// 3. Устанавливаем обработчик для входящего звука
+	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+		log.Printf("INFO: [CallService] (Инициатор) Получен удаленный трек! Codec: %s", track.Codec().MimeType)
+		go cs.playRemoteTrack(track)
+	})
+
+	// 4. Запускаем аудио-устройство ДО создания Offer
+	if err := cs.startAudioDevice(); err != nil {
+		pc.Close()
 		return err
 	}
 
-	// Запускаем горутину, которая читает RTCP пакеты (необходимо для статистики)
-	go func() {
-		rtcpBuf := make([]byte, 1500)
-		for {
-			if _, _, rtcpErr := rtpSender.Read(rtcpBuf); rtcpErr != nil {
-				return
-			}
-		}
-	}()
-
-	go cs.captureAudio(audioTrack)
-
-	// --- КЛЮЧЕВОЕ ИЗМЕНЕНИЕ №1: Добавляем Data Channel ---
-	// Это заставляет Pion сгенерировать правильный SDP с ice-ufrag.
-	// В будущем мы сможем использовать этот канал для отправки данных во время звонка.
+	// ... остальная логика без изменений ...
 	if _, err := pc.CreateDataChannel("owl-whisper-data", nil); err != nil {
+		cs.HangupCall()
 		return fmt.Errorf("не удалось создать Data Channel: %w", err)
 	}
 
 	iceGatheringComplete := webrtc.GatheringCompletePromise(pc)
-
-	pc.OnICECandidate(func(c *webrtc.ICECandidate) { /* ... (без изменений) */ })
 	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 		log.Printf("INFO: [CallService] (Инициатор) Состояние PeerConnection: %s", state.String())
+		if state == webrtc.PeerConnectionStateConnected {
+			cs.stateMutex.Lock()
+			cs.currentState = CallStateConnected
+			cs.stateMutex.Unlock()
+		}
 	})
 
 	offer, err := pc.CreateOffer(nil)
 	if err != nil {
+		cs.HangupCall()
 		return err
 	}
 
 	if err = pc.SetLocalDescription(offer); err != nil {
+		cs.HangupCall()
 		return err
 	}
 
 	<-iceGatheringComplete
-
 	finalOffer := pc.LocalDescription()
 
-	// Сохраняем состояния
-	cs.stateMutex.Lock()
+	cs.pcMutex.Lock()
 	cs.peerConnection = pc
+	cs.pcMutex.Unlock()
+
+	cs.stateMutex.Lock()
 	cs.currentTargetPeerID = recipientID
 	cs.currentCallID = uuid.New().String()
 	cs.currentState = CallStateDialing
 	cs.stateMutex.Unlock()
 
-	// Отправляем готовый Offer
 	log.Printf("INFO: [CallService] Сбор ICE завершен. Отправляем готовый Offer...")
 	offerMsg := &protocol.CallOffer{Sdp: finalOffer.SDP}
 	signalMsg := &protocol.SignalingMessage{
 		CallId:  cs.currentCallID,
 		Payload: &protocol.SignalingMessage_Offer{Offer: offerMsg},
 	}
-
 	envelope := &protocol.Envelope{
 		MessageId:     uuid.New().String(),
 		SenderId:      cs.core.GetMyPeerID(),
 		TimestampUnix: time.Now().Unix(),
 		Payload:       &protocol.Envelope_SignalingMessage{SignalingMessage: signalMsg},
 	}
-
 	data, err := proto.Marshal(envelope)
 	if err != nil {
+		cs.HangupCall()
 		return err
 	}
 
 	return cs.core.SendDataToPeer(recipientID, data)
 }
 
-func (cs *CallService) HandleSignalingMessage(senderID string, msg *protocol.SignalingMessage) {
-	callID := msg.CallId
-
-	switch payload := msg.Payload.(type) {
-	case *protocol.SignalingMessage_Offer:
-		if err := cs.HandleIncomingOffer(senderID, callID, payload.Offer); err != nil {
-			log.Printf("ERROR: [CallService] Ошибка обработки Offer: %v", err)
-		}
-
-	case *protocol.SignalingMessage_Answer:
-		if err := cs.HandleIncomingAnswer(senderID, callID, payload.Answer); err != nil {
-			log.Printf("ERROR: [CallService] Ошибка обработки Answer: %v", err)
-		}
-
-	case *protocol.SignalingMessage_Candidate:
-		if err := cs.HandleIncomingICECandidate(senderID, callID, payload.Candidate); err != nil {
-			log.Printf("ERROR: [CallService] Ошибка обработки ICE Candidate: %v", err)
-		}
-	}
-}
-
-// HandleIncomingOffer - ФИНАЛЬНАЯ ВЕРСИЯ.
-func (cs *CallService) HandleIncomingOffer(senderID string, callID string, offer *protocol.CallOffer) error {
-	cs.stateMutex.Lock()
-	if cs.currentState != CallStateIdle {
-		cs.stateMutex.Unlock()
-		return fmt.Errorf("получен Offer, но состояние не Idle (%s)", cs.currentState)
-	}
-
-	log.Printf("INFO: [CallService] Получен входящий звонок. Сохраняем Offer и уведомляем UI.", senderID[:8])
-	cs.incomingCall = &IncomingCallData{
-		SenderID: senderID,
-		CallID:   callID,
-		Offer:    offer,
-	}
-	cs.currentState = CallStateIncoming
-	cs.stateMutex.Unlock()
-
-	if cs.onIncomingCall != nil {
-		go cs.onIncomingCall(senderID, callID)
-	}
-	return nil
-}
-
-// HandleIncomingAnswer обрабатывает входящий CallAnswer.
-func (cs *CallService) HandleIncomingAnswer(senderID string, callID string, answer *protocol.CallAnswer) error {
-	if cs.peerConnection == nil || cs.currentTargetPeerID != senderID {
-		return fmt.Errorf("получен Answer, но нет активного звонка с этим пиром")
-	}
-
-	// Устанавливаем полученный Answer как "удаленное" описание.
-	err := cs.peerConnection.SetRemoteDescription(webrtc.SessionDescription{
-		Type: webrtc.SDPTypeAnswer,
-		SDP:  answer.Sdp,
-	})
-	if err != nil {
-		return err
-	}
-
-	// --- НОВЫЙ БЛОК: "Слив" буфера ---
-	cs.applyPendingCandidates_unsafe(senderID)
-	// --- КОНЕЦ НОВОГО БЛОКА ---
-
-	return nil
-}
-
-// HandleIncomingICECandidate - ТЕПЕРЬ ВСЕГДА БУФЕРИЗИРУЕТ, если мы - получатель.
-func (cs *CallService) HandleIncomingICECandidate(senderID string, callID string, candidate *protocol.ICECandidate) error {
-	cs.pcMutex.Lock()
-	defer cs.pcMutex.Unlock()
-
-	candidateInit := webrtc.ICECandidateInit{Candidate: candidate.CandidateJson}
-
-	// Если мы - инициатор, и pc уже создан, добавляем сразу.
-	if cs.currentState == CallStateDialing && cs.peerConnection != nil {
-		return cs.peerConnection.AddICECandidate(candidateInit)
-	}
-
-	// Во всех остальных случаях (особенно, когда нам звонят) - буферизируем.
-	log.Printf("INFO: [CallService] Получен 'ранний' ICE-кандидат от %s. Буферизируем.", senderID[:8])
-	cs.pendingCandidates[senderID] = append(cs.pendingCandidates[senderID], candidateInit)
-	return nil
-}
-
-// AcceptCall - ФИНАЛЬНАЯ ВЕРСЯ. Добавляет обработчик OnDataChannel.
+// AcceptCall - ИСПРАВЛЕННАЯ ВЕРСИЯ
 func (cs *CallService) AcceptCall() error {
 	cs.stateMutex.Lock()
 	if cs.currentState != CallStateIncoming || cs.incomingCall == nil {
@@ -295,81 +248,67 @@ func (cs *CallService) AcceptCall() error {
 		return err
 	}
 
-	// --- КЛЮЧЕВОЕ ИЗМЕНЕНИЕ №2: Добавляем обработчик Data Channel ---
-	// Мы должны быть готовы принять Data Channel, который инициировал собеседник.
-	pc.OnDataChannel(func(dc *webrtc.DataChannel) {
-		log.Printf("INFO: [CallService] Получен новый Data Channel '%s' от %s", dc.Label(), senderID[:8])
-		// TODO: Настроить обработчики для этого канала (OnOpen, OnMessage)
-	})
-
+	// 1. Устанавливаем обработчик для входящего звука
 	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-		log.Printf("INFO: [CallService] Получен новый трек! Codec: %s", track.Codec().MimeType)
-		// Запускаем горутину для воспроизведения
-		go cs.playTrack(track)
+		log.Printf("INFO: [CallService] (Ответчик) Получен удаленный трек! Codec: %s", track.Codec().MimeType)
+		go cs.playRemoteTrack(track)
 	})
 
-	audioTrack, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus}, "audio", "pion")
+	// 2. Настраиваем наш исходящий трек для отправки PCM
+	audioTrack, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 1}, "audio", "pion")
 	if err != nil {
+		pc.Close()
 		return err
 	}
-	rtpSender, err := pc.AddTrack(audioTrack)
-	if err != nil {
+	cs.localTrack = audioTrack
+	if _, err := pc.AddTrack(audioTrack); err != nil {
+		pc.Close()
 		return err
 	}
-	go func() {
-		rtcpBuf := make([]byte, 1500)
-		for {
-			if _, _, rtcpErr := rtpSender.Read(rtcpBuf); rtcpErr != nil {
-				return
-			}
-		}
-	}()
-	go cs.captureAudio(audioTrack)
 
-	// Настраиваем обработчики
-	pc.OnICECandidate(func(c *webrtc.ICECandidate) {
-		if c == nil {
-			return
-		}
-		cs.sendICECandidate(senderID, callID, c)
-	})
+	// 3. Запускаем аудио-устройство ДО установки Remote Description
+	if err := cs.startAudioDevice(); err != nil {
+		pc.Close()
+		return err
+	}
+
 	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 		log.Printf("INFO: [CallService] (Ответчик) Состояние PeerConnection: %s", state.String())
 	})
-
-	// 2. Устанавливаем RemoteDescription. Теперь это безопасно.
 
 	if err = pc.SetRemoteDescription(webrtc.SessionDescription{
 		Type: webrtc.SDPTypeOffer,
 		SDP:  offer.Sdp,
 	}); err != nil {
+		cs.HangupCall()
 		return err
 	}
+
+	cs.pcMutex.Lock()
+	cs.peerConnection = pc
+	cs.pcMutex.Unlock()
 
 	cs.applyPendingCandidates_unsafe(senderID)
 
 	answer, err := pc.CreateAnswer(nil)
 	if err != nil {
+		cs.HangupCall()
 		return err
 	}
 
 	gatherComplete := webrtc.GatheringCompletePromise(pc)
 	if err = pc.SetLocalDescription(answer); err != nil {
+		cs.HangupCall()
 		return err
 	}
 	<-gatherComplete
 
 	finalAnswer := pc.LocalDescription()
 
-	cs.pcMutex.Lock()
-	cs.peerConnection = pc
-	cs.pcMutex.Unlock()
-
 	cs.stateMutex.Lock()
 	cs.currentState = CallStateConnected
 	cs.stateMutex.Unlock()
 
-	// Отправляем ГОТОВЫЙ Answer
 	answerMsg := &protocol.CallAnswer{Sdp: finalAnswer.SDP}
 	signalMsg := &protocol.SignalingMessage{
 		CallId:  callID,
@@ -383,6 +322,7 @@ func (cs *CallService) AcceptCall() error {
 	}
 	data, err := proto.Marshal(envelope)
 	if err != nil {
+		cs.HangupCall()
 		return err
 	}
 
@@ -391,25 +331,215 @@ func (cs *CallService) AcceptCall() error {
 
 // HangupCall - универсальный метод для завершения/отклонения звонка.
 func (cs *CallService) HangupCall() error {
-	cs.stateMutex.Lock()
-	defer cs.stateMutex.Unlock()
-
+	cs.pcMutex.Lock()
 	if cs.peerConnection != nil {
 		cs.peerConnection.Close()
 		cs.peerConnection = nil
 	}
+	cs.pcMutex.Unlock()
 
-	// TODO: Отправить SignalingMessage с Hangup
+	cs.stopAudioDevice()
 
+	cs.stateMutex.Lock()
 	cs.currentState = CallStateIdle
 	cs.currentTargetPeerID = ""
 	cs.currentCallID = ""
+	cs.incomingCall = nil
+	cs.stateMutex.Unlock()
 
 	log.Println("INFO: [CallService] Звонок завершен/отклонен.")
 	return nil
 }
 
+// startAudioDevice - ИСПРАВЛЕННАЯ И УПРОЩЕННАЯ ВЕРСИЯ
+func (cs *CallService) startAudioDevice() error {
+	if cs.audioDevice != nil && cs.audioDevice.IsStarted() {
+		return nil
+	}
+
+	cs.captureBuffer.Reset()
+	cs.playbackBuffer.Reset()
+	cs.playbackStagingBuffer.Reset()
+
+	deviceConfig := malgo.DefaultDeviceConfig(malgo.Duplex)
+	deviceConfig.Capture.Format = malgo.FormatS16
+	deviceConfig.Capture.Channels = channels
+	deviceConfig.Playback.Format = malgo.FormatS16
+	deviceConfig.Playback.Channels = channels
+	deviceConfig.SampleRate = sampleRate
+
+	callbacks := malgo.DeviceCallbacks{
+		Data: func(output, input []byte, framecount uint32) {
+			// --- ЗАХВАТ, КОДИРОВАНИЕ И ОТПРАВКА ---
+			cs.captureBuffer.Write(input)
+			for cs.captureBuffer.Len() >= pcmSizeBytes {
+
+				// 1. Читаем сырой PCM фрейм из буфера
+				pcmBytes := make([]byte, pcmSizeBytes)
+				_, _ = cs.captureBuffer.Read(pcmBytes)
+
+				// 2. Конвертируем []byte в []int16 для кодировщика
+				pcmInt16 := make([]int16, frameSize*channels)
+				for i := 0; i < len(pcmInt16); i++ {
+					pcmInt16[i] = int16(binary.LittleEndian.Uint16(pcmBytes[i*2:]))
+				}
+
+				// 3. Готовим буфер для сжатых Opus данных (размер с запасом)
+				opusData := make([]byte, 1000)
+
+				// 4. Кодируем!
+				n, err := cs.opusEncoder.Encode(pcmInt16, opusData)
+				if err != nil {
+					log.Printf("WARN: Ошибка кодирования Opus: %v", err)
+					continue
+				}
+				opusData = opusData[:n] // Уменьшаем срез до реального размера данных
+
+				// 5. Отправляем сжатые данные в трек
+				if cs.localTrack != nil {
+					sample := media.Sample{Data: opusData, Duration: time.Millisecond * 20}
+					if err := cs.localTrack.WriteSample(sample); err != nil && err != io.ErrClosedPipe {
+						// log.Printf("WARN: Ошибка записи аудио-сэмпла: %v", err)
+					}
+				}
+			}
+		},
+	}
+
+	dev, err := malgo.InitDevice(cs.malgoCtx.Context, deviceConfig, callbacks)
+	if err != nil {
+		return fmt.Errorf("ошибка malgo.InitDevice: %w", err)
+	}
+
+	if err := dev.Start(); err != nil {
+		dev.Uninit()
+		return fmt.Errorf("ошибка malgo.Device.Start: %w", err)
+	}
+	cs.audioDevice = dev
+	log.Println("INFO: [malgo] Аудио-устройство инициализировано и запущено.")
+	return nil
+}
+
+// stopAudioDevice останавливает и освобождает ресурсы malgo
+func (cs *CallService) stopAudioDevice() {
+	if cs.audioDevice != nil {
+		cs.audioDevice.Stop()
+		cs.audioDevice.Uninit()
+		cs.audioDevice = nil
+		log.Println("INFO: [malgo] Аудио-устройство остановлено.")
+	}
+	if cs.playbackBuffer != nil {
+		cs.playbackBuffer.Reset()
+	}
+	if cs.captureBuffer != nil {
+		cs.captureBuffer.Reset()
+	}
+	if cs.playbackStagingBuffer != nil {
+		cs.playbackStagingBuffer.Reset()
+	}
+}
+
+// playRemoteTrack читает пакеты из WebRTC, декодирует их и кладет в буфер для воспроизведения
+func (cs *CallService) playRemoteTrack(remoteTrack *webrtc.TrackRemote) {
+	pcm := make([]int16, frameSize*channels)
+	for {
+		rtpPacket, _, err := remoteTrack.ReadRTP()
+		if err != nil {
+			if err == io.EOF {
+				log.Printf("INFO: [WebRTC] Удаленный аудио-поток завершен.")
+			} else {
+				log.Printf("ERROR: [WebRTC] Ошибка чтения удаленного трека: %v", err)
+			}
+			return
+		}
+
+		if _, err := cs.opusDecoder.Decode(rtpPacket.Payload, pcm); err != nil {
+			log.Printf("WARN: Ошибка декодирования Opus: %v", err)
+			continue
+		}
+
+		pcmBytes := make([]byte, len(pcm)*2)
+		for i, s := range pcm {
+			pcmBytes[2*i] = byte(s)
+			pcmBytes[2*i+1] = byte(s >> 8)
+		}
+
+		if _, err := cs.playbackBuffer.Write(pcmBytes); err != nil {
+			// log.Printf("WARN: Ошибка записи в Jitter Buffer: %v", err)
+		}
+	}
+}
+
+// --- Остальные функции (без изменений) ---
+
+func (cs *CallService) HandleSignalingMessage(senderID string, msg *protocol.SignalingMessage) {
+	callID := msg.CallId
+	switch payload := msg.Payload.(type) {
+	case *protocol.SignalingMessage_Offer:
+		if err := cs.HandleIncomingOffer(senderID, callID, payload.Offer); err != nil {
+			log.Printf("ERROR: [CallService] Ошибка обработки Offer: %v", err)
+		}
+	case *protocol.SignalingMessage_Answer:
+		if err := cs.HandleIncomingAnswer(senderID, callID, payload.Answer); err != nil {
+			log.Printf("ERROR: [CallService] Ошибка обработки Answer: %v", err)
+		}
+	case *protocol.SignalingMessage_Candidate:
+		if err := cs.HandleIncomingICECandidate(senderID, callID, payload.Candidate); err != nil {
+			log.Printf("ERROR: [CallService] Ошибка обработки ICE Candidate: %v", err)
+		}
+	}
+}
+
+func (cs *CallService) HandleIncomingOffer(senderID string, callID string, offer *protocol.CallOffer) error {
+	cs.stateMutex.Lock()
+	if cs.currentState != CallStateIdle {
+		cs.stateMutex.Unlock()
+		return fmt.Errorf("получен Offer, но состояние не Idle (%s)", cs.currentState)
+	}
+	log.Printf("INFO: [CallService] Получен входящий звонок. Сохраняем Offer и уведомляем UI.")
+	cs.incomingCall = &IncomingCallData{SenderID: senderID, CallID: callID, Offer: offer}
+	cs.currentState = CallStateIncoming
+	cs.stateMutex.Unlock()
+	if cs.onIncomingCall != nil {
+		go cs.onIncomingCall(senderID, callID)
+	}
+	return nil
+}
+
+func (cs *CallService) HandleIncomingAnswer(senderID string, callID string, answer *protocol.CallAnswer) error {
+	cs.pcMutex.RLock()
+	pc := cs.peerConnection
+	targetPeer := cs.currentTargetPeerID
+	cs.pcMutex.RUnlock()
+	if pc == nil || targetPeer != senderID {
+		return fmt.Errorf("получен Answer, но нет активного звонка с этим пиром")
+	}
+	err := pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: answer.Sdp})
+	if err != nil {
+		return err
+	}
+	cs.pcMutex.Lock()
+	cs.applyPendingCandidates_unsafe(senderID)
+	cs.pcMutex.Unlock()
+	return nil
+}
+
+func (cs *CallService) HandleIncomingICECandidate(senderID string, callID string, candidate *protocol.ICECandidate) error {
+	cs.pcMutex.Lock()
+	defer cs.pcMutex.Unlock()
+	candidateInit := webrtc.ICECandidateInit{Candidate: candidate.CandidateJson}
+	if cs.peerConnection != nil && cs.peerConnection.RemoteDescription() != nil {
+		return cs.peerConnection.AddICECandidate(candidateInit)
+	}
+	log.Printf("INFO: [CallService] Получен 'ранний' ICE-кандидат от %s. Буферизируем.", senderID[:8])
+	cs.pendingCandidates[senderID] = append(cs.pendingCandidates[senderID], candidateInit)
+	return nil
+}
+
 func (cs *CallService) sendICECandidate(recipientID string, callID string, c *webrtc.ICECandidate) {
+	if c == nil {
+		return
+	}
 	candidateMsg := &protocol.ICECandidate{CandidateJson: c.ToJSON().Candidate}
 	signalMsg := &protocol.SignalingMessage{
 		CallId:  callID,
@@ -421,19 +551,16 @@ func (cs *CallService) sendICECandidate(recipientID string, callID string, c *we
 		TimestampUnix: time.Now().Unix(),
 		Payload:       &protocol.Envelope_SignalingMessage{SignalingMessage: signalMsg},
 	}
-
 	data, err := proto.Marshal(envelope)
 	if err != nil {
 		log.Printf("ERROR: [CallService] Ошибка Marshal при создании ICE Candidate: %v", err)
 		return
 	}
-
 	if err := cs.core.SendDataToPeer(recipientID, data); err != nil {
 		log.Printf("ERROR: [CallService] Не удалось отправить ICE Candidate: %v", err)
 	}
 }
 
-// applyPendingCandidates_unsafe проверяет буфер и добавляет "отложенные" кандидаты.
 func (cs *CallService) applyPendingCandidates_unsafe(peerID string) {
 	if candidates, ok := cs.pendingCandidates[peerID]; ok {
 		log.Printf("INFO: [CallService] Найдены %d 'отложенных' кандидатов для %s. Применяем...", len(candidates), peerID[:8])
@@ -442,139 +569,52 @@ func (cs *CallService) applyPendingCandidates_unsafe(peerID string) {
 				log.Printf("WARN: [CallService] Не удалось применить отложенный кандидат: %v", err)
 			}
 		}
-		// Очищаем буфер для этого пира
 		delete(cs.pendingCandidates, peerID)
 	}
 }
 
-// --- НОВАЯ HELPER-ФУНКЦИЯ ДЛЯ ВОСПРОИЗВЕДЕНИЯ ---
-func playTrack(track *webrtc.TrackRemote) {
-	// Создаем ogg-файл для отладки, чтобы можно было прослушать, что пришло.
-	// В реальном приложении здесь будет воспроизведение напрямую в динамики.
-	fileName := fmt.Sprintf("output-%s.ogg", track.ID())
-	file, err := oggwriter.New(fileName, track.Codec().ClockRate, track.Codec().Channels)
-	if err != nil {
-		log.Printf("ERROR: Не удалось создать ogg-файл: %v", err)
-		return
-	}
-	defer file.Close()
+type JitterBuffer struct {
+	packets   chan []byte
+	frameSize int
+	mu        sync.Mutex
+}
 
-	log.Printf("INFO: Начата запись входящего аудио в файл %s", fileName)
-
-	for {
-		// Читаем RTP-пакет из потока
-		rtpPacket, _, err := track.ReadRTP()
-		if err != nil {
-			if err == io.EOF {
-				log.Printf("INFO: Аудио-поток завершен для файла %s", fileName)
-				return
-			}
-			log.Printf("ERROR: Ошибка чтения RTP-пакета: %v", err)
-			return
-		}
-		// Записываем пакет в ogg-файл
-		if err := file.WriteRTP(rtpPacket); err != nil {
-			log.Printf("ERROR: Ошибка записи в ogg-файл: %v", err)
-			return
-		}
+func NewJitterBuffer(frameSize int, capacity int) *JitterBuffer {
+	return &JitterBuffer{
+		packets:   make(chan []byte, capacity),
+		frameSize: frameSize,
 	}
 }
 
-const (
-	sampleRate = 48000
-	channels   = 2
-	frameSize  = 960 // 20ms at 48kHz
-)
-
-// captureAudio захватывает аудио с микрофона и пишет его в WebRTC трек.
-func (cs *CallService) captureAudio(track *webrtc.TrackLocalStaticSample) {
-	portaudio.Initialize()
-	defer portaudio.Terminate()
-
-	in := make([]int16, frameSize*channels)
-	stream, err := portaudio.OpenDefaultStream(channels, 0, float64(sampleRate), len(in), in)
-	if err != nil {
-		log.Printf("ERROR: [PortAudio] Не удалось открыть поток с микрофона: %v", err)
-		return
+func (jb *JitterBuffer) Write(p []byte) (int, error) {
+	if len(p) != jb.frameSize {
+		return 0, fmt.Errorf("неверный размер фрейма: ожидался %d, получен %d", jb.frameSize, len(p))
 	}
-	defer stream.Close()
-
-	if err := stream.Start(); err != nil {
-		log.Printf("ERROR: [PortAudio] Не удалось начать захват с микрофона: %v", err)
-		return
-	}
-	log.Println("INFO: [PortAudio] Захват аудио с микрофона начат...")
-
-	for {
-		// Проверяем, активен ли еще звонок
-		cs.pcMutex.RLock()
-		pcState := cs.peerConnection
-		cs.pcMutex.RUnlock()
-		if pcState == nil || pcState.ConnectionState() == webrtc.PeerConnectionStateClosed {
-			log.Println("INFO: [PortAudio] Звонок завершен, остановка захвата аудио.")
-			stream.Stop()
-			return
-		}
-
-		// Читаем данные с микрофона
-		if err := stream.Read(); err != nil {
-			// log.Printf("WARN: [PortAudio] Ошибка чтения с микрофона: %v", err)
-			continue
-		}
-
-		// Преобразуем int16 в float32 для Pion (это может потребовать оптимизации)
-		// Для простоты пока отправляем как есть, но Pion ожидает media.Sample
-		sample := make([]byte, len(in)*2)
-		for i := range in {
-			binary.LittleEndian.PutUint16(sample[i*2:], uint16(in[i]))
-		}
-
-		// Пишем сэмпл в трек
-		if err := track.WriteSample(media.Sample{Data: sample, Duration: time.Millisecond * 20}); err != nil {
-			// log.Printf("WARN: [Pion] Ошибка записи аудио сэмпла: %v", err)
-		}
+	select {
+	case jb.packets <- p:
+		return len(p), nil
+	default:
+		<-jb.packets
+		jb.packets <- p
+		return len(p), fmt.Errorf("jitter buffer overflow")
 	}
 }
 
-// trackReader - это адаптер, который превращает *webrtc.TrackRemote в io.Reader.
-type trackReader struct {
-	track *webrtc.TrackRemote
+func (jb *JitterBuffer) Read(p []byte) (int, error) {
+	select {
+	case packet := <-jb.packets:
+		n := copy(p, packet)
+		return n, nil
+	default:
+		return 0, fmt.Errorf("jitter buffer underflow")
+	}
 }
 
-// Read реализует интерфейс io.Reader.
-func (r *trackReader) Read(p []byte) (n int, err error) {
-	// Вызываем оригинальный Read, но игнорируем третье возвращаемое значение (атрибуты).
-	n, _, err = r.track.Read(p)
-	return
-}
-
-// ЗАМЕНИТЬ ЭТУ ФУНКЦИЮ в call_service.go
-
-func (cs *CallService) playTrack(track *webrtc.TrackRemote) {
-	op := &oto.NewContextOptions{
-		SampleRate:   sampleRate,
-		ChannelCount: channels,
-		Format:       oto.FormatSignedInt16LE,
+func (jb *JitterBuffer) Reset() {
+	jb.mu.Lock()
+	defer jb.mu.Unlock()
+	// Drain the channel
+	for len(jb.packets) > 0 {
+		<-jb.packets
 	}
-
-	otoCtx, ready, err := oto.NewContext(op)
-	if err != nil {
-		log.Printf("ERROR: [Oto] Не удалось создать аудио-контекст: %v", err)
-		return
-	}
-	<-ready
-
-	// Создаем плеер, передавая ему наш адаптер.
-	player := otoCtx.NewPlayer(&trackReader{track: track})
-	defer player.Close()
-
-	player.Play()
-
-	log.Println("INFO: [Oto] Воспроизведение аудио начато...")
-
-	// ИСПРАВЛЕНО: Мы больше ничего не ждем.
-	// Плеер будет работать в своем фоновом потоке.
-	// Когда собеседник завершит звонок, `track.Read()` внутри адаптера
-	// вернет ошибку io.EOF. Это заставит `player` остановиться
-	// и горутина завершится сама собой. Это правильное поведение.
 }
