@@ -96,12 +96,14 @@ func DefaultConfig() Config {
 
 		EnableTCP:       true,
 		EnableQUIC:      true,
-		EnableWebSocket: false,
-		EnableWebRTC:    false,
+		EnableWebSocket: true,
+		EnableWebRTC:    true,
 
 		ListenAddresses: []string{
 			"/ip4/0.0.0.0/tcp/0",
+			"/ip4/0.0.0.0/tcp/0/ws",
 			"/ip4/0.0.0.0/udp/0/quic-v1",
+			"/ip4/0.0.0.0/udp/0/webrtc-direct",
 		},
 
 		StaticRelays: []string{
