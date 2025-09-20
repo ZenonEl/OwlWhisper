@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	newcore "OwlWhisper/cmd/fyne-gui/new-core"
@@ -57,12 +58,20 @@ type CallService struct {
 	audioDevice           *malgo.Device
 	localTrack            *webrtc.TrackLocalStaticSample
 	opusEncoder           *opus.Encoder
-	opusDecoder           *opus.Decoder // Декодер нужен для входящего звука
+	opusDecoder           *opus.Decoder
 	playbackBuffer        *JitterBuffer
 	captureBuffer         *bytes.Buffer
 	playbackStagingBuffer *bytes.Buffer
+	playbackLinearBuffer  *bytes.Buffer
+	doneChan              chan struct{}
 
 	onIncomingCall func(senderID, callID string)
+
+	// Поля для телеметрии
+	statsTicker      *time.Ticker  // Таймер для вывода статистики
+	underflowCounter atomic.Uint64 // Счетчик опустошений буфера
+
+	isPlaybackReady atomic.Bool // Флаг готовности к воспроизведению
 
 	pendingCandidates map[string][]webrtc.ICECandidateInit
 }
@@ -84,7 +93,7 @@ func NewCallService(core newcore.ICoreController, cs *ContactService, onIncoming
 	}
 
 	se := webrtc.SettingEngine{}
-	se.SetReceiveMTU(0)
+	se.SetReceiveMTU(1500)
 
 	api := webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithSettingEngine(se))
 
@@ -121,7 +130,8 @@ func NewCallService(core newcore.ICoreController, cs *ContactService, onIncoming
 		malgoCtx:              malgoCtx,
 		opusDecoder:           decoder,
 		opusEncoder:           encoder,
-		playbackBuffer:        NewJitterBuffer(pcmSizeBytes, 1000),
+		playbackBuffer:        NewJitterBuffer(pcmSizeBytes, 100000),
+		playbackLinearBuffer:  new(bytes.Buffer),
 		captureBuffer:         new(bytes.Buffer),
 		playbackStagingBuffer: new(bytes.Buffer),
 	}, nil
@@ -329,6 +339,10 @@ func (cs *CallService) AcceptCall() error {
 	return cs.core.SendDataToPeer(senderID, data)
 }
 
+func (jb *JitterBuffer) Len() int {
+	return len(jb.packets)
+}
+
 // HangupCall - универсальный метод для завершения/отклонения звонка.
 func (cs *CallService) HangupCall() error {
 	cs.pcMutex.Lock()
@@ -357,9 +371,15 @@ func (cs *CallService) startAudioDevice() error {
 		return nil
 	}
 
+	// Сброс состояния
+	cs.isPlaybackReady.Store(false)
 	cs.captureBuffer.Reset()
 	cs.playbackBuffer.Reset()
-	cs.playbackStagingBuffer.Reset()
+	cs.playbackLinearBuffer.Reset()
+	cs.doneChan = make(chan struct{})
+
+	// Запускаем ключевую горутину для перекладывания данных из jitter в линейный буфер
+	go cs.startPlaybackLoop()
 
 	deviceConfig := malgo.DefaultDeviceConfig(malgo.Duplex)
 	deviceConfig.Capture.Format = malgo.FormatS16
@@ -370,66 +390,66 @@ func (cs *CallService) startAudioDevice() error {
 
 	callbacks := malgo.DeviceCallbacks{
 		Data: func(output, input []byte, framecount uint32) {
-			// --- ЗАХВАТ, КОДИРОВАНИЕ И ОТПРАВКА ---
+			// --- Блок ЗАХВАТА (остается без изменений) ---
 			cs.captureBuffer.Write(input)
 			for cs.captureBuffer.Len() >= pcmSizeBytes {
-
-				// 1. Читаем сырой PCM фрейм из буфера
+				// ... (вся логика кодирования и отправки, как раньше)
 				pcmBytes := make([]byte, pcmSizeBytes)
 				_, _ = cs.captureBuffer.Read(pcmBytes)
 
-				// 2. Конвертируем []byte в []int16 для кодировщика
 				pcmInt16 := make([]int16, frameSize*channels)
 				for i := 0; i < len(pcmInt16); i++ {
 					pcmInt16[i] = int16(binary.LittleEndian.Uint16(pcmBytes[i*2:]))
 				}
 
-				// 3. Готовим буфер для сжатых Opus данных (размер с запасом)
 				opusData := make([]byte, 1000)
-
-				// 4. Кодируем!
 				n, err := cs.opusEncoder.Encode(pcmInt16, opusData)
 				if err != nil {
 					log.Printf("WARN: Ошибка кодирования Opus: %v", err)
 					continue
 				}
-				opusData = opusData[:n] // Уменьшаем срез до реального размера данных
+				opusData = opusData[:n]
 
-				// 5. Отправляем сжатые данные в трек
 				if cs.localTrack != nil {
 					sample := media.Sample{Data: opusData, Duration: time.Millisecond * 20}
 					if err := cs.localTrack.WriteSample(sample); err != nil && err != io.ErrClosedPipe {
 						// log.Printf("WARN: Ошибка записи аудио-сэмпла: %v", err)
 					}
 				}
-				requestedBytes := len(output)
-				for cs.playbackStagingBuffer.Len() < requestedBytes {
-					networkPacket := make([]byte, pcmSizeBytes)
+			}
 
-					// --- ДОБАВЬТЕ ЛОГ ЗДЕСЬ ---
-					bytesRead, err := cs.playbackBuffer.Read(networkPacket)
-					if err != nil {
-						// Этот лог покажет, если буфер постоянно пуст
-						log.Printf("DEBUG: Ошибка чтения из Jitter-буфера: %v", err)
-						break
-					}
-					log.Printf("DEBUG: Прочитано из Jitter-буфера: %d байт", bytesRead)
-					// --- КОНЕЦ ---
-
-					cs.playbackStagingBuffer.Write(networkPacket)
+			// --- Блок ВОСПРОИЗВЕДЕНИЯ (теперь очень простой) ---
+			if !cs.isPlaybackReady.Load() {
+				// Заполняем тишиной, пока буфер не готов
+				for i := range output {
+					output[i] = 0
 				}
-				cs.playbackStagingBuffer.Read(output)
+				return
+			}
+
+			// Читаем ровно столько, сколько нужно, из линейного буфера
+			n, _ := cs.playbackLinearBuffer.Read(output)
+			if n < len(output) {
+				// Произошел Underflow в линейном буфере, заполняем остаток тишиной
+				cs.underflowCounter.Add(1)
+				for i := n; i < len(output); i++ {
+					output[i] = 0
+				}
 			}
 		},
 	}
 
+	// ... (код с ticker'ами и статистикой можно оставить как есть)
+
 	dev, err := malgo.InitDevice(cs.malgoCtx.Context, deviceConfig, callbacks)
 	if err != nil {
+		close(cs.doneChan) // Останавливаем горутину при ошибке
 		return fmt.Errorf("ошибка malgo.InitDevice: %w", err)
 	}
 
 	if err := dev.Start(); err != nil {
 		dev.Uninit()
+		close(cs.doneChan)
 		return fmt.Errorf("ошибка malgo.Device.Start: %w", err)
 	}
 	cs.audioDevice = dev
@@ -439,20 +459,28 @@ func (cs *CallService) startAudioDevice() error {
 
 // stopAudioDevice останавливает и освобождает ресурсы malgo
 func (cs *CallService) stopAudioDevice() {
+	if cs.doneChan != nil {
+		close(cs.doneChan) // Сигнализируем горутине playbackLoop о завершении
+		cs.doneChan = nil
+	}
+	if cs.statsTicker != nil {
+		cs.statsTicker.Stop()
+	}
 	if cs.audioDevice != nil {
 		cs.audioDevice.Stop()
 		cs.audioDevice.Uninit()
 		cs.audioDevice = nil
 		log.Println("INFO: [malgo] Аудио-устройство остановлено.")
 	}
+	// Сброс буферов
 	if cs.playbackBuffer != nil {
 		cs.playbackBuffer.Reset()
 	}
 	if cs.captureBuffer != nil {
 		cs.captureBuffer.Reset()
 	}
-	if cs.playbackStagingBuffer != nil {
-		cs.playbackStagingBuffer.Reset()
+	if cs.playbackLinearBuffer != nil {
+		cs.playbackLinearBuffer.Reset()
 	}
 }
 
@@ -470,34 +498,24 @@ func (cs *CallService) playRemoteTrack(remoteTrack *webrtc.TrackRemote) {
 			return
 		}
 
-		log.Printf("DEBUG: Получен RTP пакет, размер полезной нагрузки: %d", len(rtpPacket.Payload))
-
 		if _, err := cs.opusDecoder.Decode(rtpPacket.Payload, pcm); err != nil {
 			log.Printf("WARN: Ошибка декодирования Opus: %v", err)
 			continue
 		}
 
-		var pcmSum int64 = 0
-		for _, sample := range pcm {
-			if sample < 0 {
-				pcmSum -= int64(sample)
-			} else {
-				pcmSum += int64(sample)
-			}
-		}
-		log.Printf("DEBUG: Фрейм декодирован, сумма семплов: %d", pcmSum)
-
 		pcmBytes := make([]byte, len(pcm)*2)
 		for i, s := range pcm {
-			// Конвертируем []int16 в []byte
 			binary.LittleEndian.PutUint16(pcmBytes[i*2:], uint16(s))
 		}
 
-		// --- ВОТ ОНО! УСИЛИВАЕМ ЗВУК ПЕРЕД ЗАПИСЬЮ В БУФЕР ---
-		amplify(pcmBytes, 10.0) // 20.0 - это коэффициент усиления, можно подобрать
+		// Усиление звука можно вернуть, если хотите
+		amplify(pcmBytes, 20.0)
 
+		// Просто пишем декодированный пакет в jitter-буфер. Всё.
 		if _, err := cs.playbackBuffer.Write(pcmBytes); err != nil {
-			// log.Printf("WARN: Ошибка записи в Jitter Buffer: %v", err)
+			// Эта ошибка теперь означает переполнение jitter-буфера,
+			// что говорит о том, что playbackLoop не справляется.
+			// log.Printf("WARN: Ошибка записи в Jitter Buffer (возможно переполнение): %v", err)
 		}
 	}
 }
@@ -633,13 +651,18 @@ func (jb *JitterBuffer) Write(p []byte) (int, error) {
 }
 
 func (jb *JitterBuffer) Read(p []byte) (int, error) {
-	select {
-	case packet := <-jb.packets:
-		n := copy(p, packet)
-		return n, nil
-	default:
-		return 0, fmt.Errorf("jitter buffer underflow")
+	totalRead := 0
+	for totalRead < len(p) {
+		select {
+		case packet := <-jb.packets:
+			n := copy(p[totalRead:], packet)
+			totalRead += n
+		default:
+			// Канал пуст, произошел underflow
+			return totalRead, fmt.Errorf("jitter buffer underflow")
+		}
 	}
+	return totalRead, nil
 }
 
 func (jb *JitterBuffer) Reset() {
@@ -672,5 +695,28 @@ func amplify(pcmData []byte, factor float32) {
 
 		// Записываем усиленный семпл обратно в срез байт
 		binary.LittleEndian.PutUint16(pcmData[i:i+2], uint16(int16(amplifiedSample)))
+	}
+}
+
+// startPlaybackLoop - это сердце новой архитектуры воспроизведения.
+// Он вычитывает пакеты из jitter-буфера и складывает их в непрерывный линейный буфер.
+func (cs *CallService) startPlaybackLoop() {
+	log.Println("INFO: Playback loop started.")
+	defer log.Println("INFO: Playback loop stopped.")
+
+	for {
+		select {
+		case <-cs.doneChan:
+			return
+		case packet := <-cs.playbackBuffer.packets:
+			// Просто пишем байты в линейный буфер
+			cs.playbackLinearBuffer.Write(packet)
+
+			// Когда в линейном буфере накопится достаточно данных, даем сигнал к началу воспроизведения
+			if !cs.isPlaybackReady.Load() && cs.playbackLinearBuffer.Len() >= pcmSizeBytes*15 { // Порог в 15 пакетов
+				log.Println("INFO: Linear playback buffer is filled. Starting audio playback.")
+				cs.isPlaybackReady.Store(true)
+			}
+		}
 	}
 }
