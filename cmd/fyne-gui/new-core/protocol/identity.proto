@@ -1,0 +1,19 @@
+// identity.proto
+syntax = "proto3";
+
+package protocol;
+
+option go_package = "./";
+// Определяет тип криптографического ключа, используемого для идентификации.
+enum KeyType {
+  KEY_TYPE_UNSPECIFIED = 0;
+  ED25519 = 1;
+  // В будущем можем добавить и другие типы, например, для пост-квантовой криптографии.
+}
+
+// IdentityPublicKey представляет собой публичный ключ, который является
+// уникальным идентификатором пользователя в сети.
+message IdentityPublicKey {
+  KeyType key_type = 1;
+  bytes public_key = 2; // Сырые байты публичного ключа.
+}

@@ -1,0 +1,73 @@
+// command.proto
+syntax = "proto3";
+
+package protocol;
+
+import "identity.proto";
+
+option go_package = "./";
+// SignedCommand - это внешний конверт для любой команды, изменяющей состояние.
+// Он обеспечивает аутентичность и целостность.
+message SignedCommand {
+  // Публичный ключ автора команды. Его подпись мы будем проверять.
+  IdentityPublicKey author_identity = 1;
+
+  // Сериализованный объект Command. Именно эти байты подписываются.
+  bytes command_data = 2;
+
+  // Цифровая подпись для command_data, созданная приватным ключом автора.
+  bytes signature = 3;
+}
+
+// Command - это сама команда, которая подписывается.
+message Command {
+  // Уникальный идентификатор "контекста" общения (чата 1:1 или группы),
+  // к которому относится эта команда.
+  // Для чата 1:1 это может быть, например, отсортированный и хешированный
+  // набор публичных ключей участников. Для группы - случайный UUID,
+  // сгенерированный при создании.
+  string context_id = 1;
+
+  // Порядковый номер команды от этого автора в рамках этого контекста.
+  // Начинается с 1. Используется для строгой упорядоченности команд
+  // и как главная защита от Replay-атак.
+  uint64 sequence_number = 2;
+
+  // Полезная нагрузка - само действие. `oneof` гарантирует, что команда
+  // может быть только одного типа.
+  oneof payload {
+    // === Команды, общие для всех контекстов ===
+    InitiateContext initiate_context = 10; // Начать новый чат (1:1 или группу)
+
+    // === Команды, специфичные для групп ===
+    AddMembers add_members = 20;
+    RemoveMembers remove_members = 21;
+    PromoteAdmins promote_admins = 22;
+  }
+}
+
+// --- Определения для полезных нагрузок команд ---
+
+// InitiateContext используется для создания нового чата.
+message InitiateContext {
+  // Список всех первоначальных участников контекста.
+  repeated IdentityPublicKey initial_members = 1;
+  // Политика чата (например, "только админы могут добавлять участников").
+  // Можно определить позже.
+  bytes policy = 2;
+}
+
+// AddMembers добавляет новых участников в существующий контекст (группу).
+message AddMembers {
+  repeated IdentityPublicKey members_to_add = 1;
+}
+
+// RemoveMembers удаляет участников из существующего контекста (группы).
+message RemoveMembers {
+  repeated IdentityPublicKey members_to_remove = 1;
+}
+
+// PromoteAdmins назначает участников администраторами.
+message PromoteAdmins {
+  repeated IdentityPublicKey members_to_promote = 1;
+}
