@@ -1,103 +1,84 @@
+// Путь: cmd/fyne-gui/new-core/protocol/chat.proto
+
 syntax = "proto3";
 
 package protocol;
-import "file_transfer.proto";
 
 option go_package = "./";
-import "signaling.proto";
 
 // ---------------------------------------------------------------- //
-// ----------------- ОСНОВНОЙ "КОНВЕРТ" ----------------- //
+// --- СООБЩЕНИЯ, ОТНОСЯЩИЕСЯ К СОДЕРЖИМОМУ ЧАТА --- //
+// ---------------------------------------------------------------- //
+// Эти сообщения будут сериализованы, зашифрованы и помещены
+// в поле `ciphertext` нашего нового `SecureEnvelope`.
 // ---------------------------------------------------------------- //
 
-// Envelope - это "конверт", в который заворачивается каждое
-// сообщение, передаваемое по сети.
-message Envelope {
-    string message_id = 1;      // Уникальный ID конверта (UUID)
-    string sender_id = 2;       // PeerID отправителя
-    int64 timestamp_unix = 3;   // Время отправки
-    
-    // Содержимое сообщения. oneof гарантирует, что внутри будет
-    // что-то одно. Мы разделили сообщения на две категории:
-    // для чатов (прямых и групповых) и для управления контактами.
+
+// ChatContent - это обертка для всего, что может появиться в ленте чата.
+message ChatContent {
     oneof payload {
-        ChatMessage chat_message = 4;      // Сообщение, относящееся к чату
-        ContactMessage contact_message = 5; // Сообщение для управления контактами
-        SignalingMessage signaling_message = 6; // Сообщение для WebRTC
+        TextMessage text = 1;         // Обычное текстовое сообщение
+        FileMetadata file = 2;        // Анонс файла для скачивания
+        ReadReceipts receipts = 3;    // Уведомления о прочтении
+        MessageEdit edit = 4;         // Редактирование предыдущего сообщения
+        MessageDelete delete = 5;       // Удаление предыдущего сообщения
+        // ... в будущем здесь появятся стикеры, опросы и т.д.
     }
 }
 
-// ---------------------------------------------------------------- //
-// ----------------- СООБЩЕНИЯ ДЛЯ ЧАТОВ ----------------- //
-// ---------------------------------------------------------------- //
 
-message ChatMessage {
-    enum ChatType {
-        PRIVATE = 0; // Личное сообщение (1-на-1)
-        GROUP = 1;   // Групповой чат
-    }
-    ChatType chat_type = 1;
-    string chat_id = 2; // ID чата (для групп - ID группы, для личных - PeerID собеседника)
-    
-    oneof content {
-        TextMessage text = 3;
-        FileMetadata file_announcement = 4; // Анонс файла
-        FileDownloadRequest file_request = 6; // Запрос на скачивание
-        FileTransferStatus file_status = 7; // Статус передачи
-        ReadReceipts read_receipts = 5;
-    }
-}
-
+// TextMessage представляет собой простое текстовое сообщение.
 message TextMessage {
-    string body = 1;
-    string reply_to_message_id = 2; // ID сообщения, на которое отвечаем
+  string body = 1;                     // Текст сообщения
+  string reply_to_message_id = 2;      // ID сообщения, на которое отвечаем (опционально)
+  repeated MessageEntity entities = 3; // Для форматирования (жирный, курсив, ссылки)
+}
+
+// MessageEntity описывает форматирование части текста.
+// (Аналогично API Telegram)
+message MessageEntity {
+  enum Type {
+    MENTION = 0;
+    HASHTAG = 1;
+    BOT_COMMAND = 2;
+    URL = 3;
+    EMAIL = 4;
+    BOLD = 5;
+    ITALIC = 6;
+    CODE = 7;
+    PRE = 8;
+  }
+  Type type = 1;
+  int32 offset = 2; // Смещение в UTF-16 кодовых единицах
+  int32 length = 3; // Длина форматированного участка
+  string url = 4;   // Для ссылок
 }
 
 
+// ReadReceipts - уведомление о прочтении одного или нескольких сообщений.
 message ReadReceipts {
-    repeated string message_ids = 1; // ID прочитанных сообщений
+  repeated string message_ids = 1;
 }
 
-// ---------------------------------------------------------------- //
-// ----------------- СООБЩЕНИЯ ДЛЯ УПРАВЛЕНИЯ КОНТАКТАМИ ----------------- //
-// ---------------------------------------------------------------- //
-
-// ContactMessage - это обертка для всех сообщений, связанных
-// с добавлением, верификацией и управлением контактами.
-message ContactMessage {
-    oneof type {
-        ProfileRequest  profile_request = 1;  // "Пинг" - запрос профиля
-        ProfileResponse profile_response = 2; // "Понг" - ответ с профилем
-        ContactRequest  contact_request = 3;  // Запрос на добавление в контакты
-        ContactAccept   contact_accept = 4;   // Подтверждение добавления
-    }
+// MessageEdit - команда на редактирование сообщения.
+message MessageEdit {
+  string target_message_id = 1; // Какое сообщение редактируем
+  TextMessage new_content = 2;  // Новое содержимое
 }
 
-// ProfileInfo - публичная часть профиля пользователя.
-message ProfileInfo {
-    string nickname = 1;
-    string discriminator = 2;
-    string display_name = 3;
-    string avatar_hash = 4;
-    map<string, string> metadata = 5; // Доп. информация (версия клиента и т.д.)
+// MessageDelete - команда на удаление сообщения.
+message MessageDelete {
+  repeated string message_ids = 1;
 }
 
-// "Пинг": запрос на получение профиля.
-message ProfileRequest {}
 
-// "Понг": ответ с профилем.
-message ProfileResponse {
-    ProfileInfo profile = 1;
-}
-
-// НОВОЕ: Запрос на добавление в контакты.
-// Содержит профиль отправителя, чтобы получатель знал, кого добавляет.
-message ContactRequest {
-    ProfileInfo sender_profile = 1;
-}
-
-// НОВОЕ: Подтверждение запроса на добавление.
-// Также содержит профиль для финальной синхронизации.
-message ContactAccept {
-    ProfileInfo sender_profile = 1;
+// FileMetadata - "Анонс" файла.
+// Это сообщение появляется в чате, чтобы показать плашку с файлом.
+message FileMetadata {
+  string transfer_id = 1;     // Уникальный ID для этой передачи (генерируется GUI, UUID)
+  string filename = 2;        // Оригинальное имя файла
+  int64  size_bytes = 3;      // Полный размер файла в байтах
+  string hash_sha256 = 4;     // Хеш всего файла для проверки целостности
+  string mime_type = 5;       // MIME-тип файла (например, "image/jpeg")
+  repeated string seeders = 6;  // Список PeerID тех, кто имеет полную копию
 }
