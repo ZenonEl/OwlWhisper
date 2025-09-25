@@ -56,8 +56,9 @@ type IncomingCallData struct {
 }
 
 type CallService struct {
-	core           newcore.ICoreController
-	contactService *ContactService
+	core            newcore.ICoreController
+	contactService  *ContactService
+	protocolService IProtocolService
 
 	webrtcAPI    *webrtc.API
 	webrtcConfig webrtc.Configuration
@@ -90,7 +91,7 @@ type CallService struct {
 	pendingCandidates map[string][]webrtc.ICECandidateInit
 }
 
-func NewCallService(core newcore.ICoreController, cs *ContactService, onIncomingCall func(string, string)) (*CallService, error) {
+func NewCallService(core newcore.ICoreController, cs *ContactService, ps IProtocolService, onIncomingCall func(string, string)) (*CallService, error) {
 	m := &webrtc.MediaEngine{}
 	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
 		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 1, SDPFmtpLine: "minptime=10;useinbandfec=1"},
@@ -126,6 +127,7 @@ func NewCallService(core newcore.ICoreController, cs *ContactService, onIncoming
 	return &CallService{
 		core:                 core,
 		contactService:       cs,
+		protocolService:      ps,
 		webrtcAPI:            api,
 		webrtcConfig:         config,
 		pendingCandidates:    make(map[string][]webrtc.ICECandidateInit),
@@ -564,7 +566,7 @@ func (cs *CallService) HandleIncomingAnswer(senderID string, callID string, answ
 func (cs *CallService) HandleIncomingICECandidate(senderID string, callID string, candidate *protocol.ICECandidate) error {
 	cs.pcMutex.Lock()
 	defer cs.pcMutex.Unlock()
-	candidateInit := webrtc.ICECandidateInit{Candidate: candidate.CandidateJson}
+	candidateInit := webrtc.ICECandidateInit{Candidate: candidate.Candidate}
 	if cs.peerConnection != nil && cs.peerConnection.RemoteDescription() != nil {
 		return cs.peerConnection.AddICECandidate(candidateInit)
 	}
@@ -577,7 +579,7 @@ func (cs *CallService) sendICECandidate(recipientID string, callID string, c *we
 	if c == nil {
 		return
 	}
-	candidateMsg := &protocol.ICECandidate{CandidateJson: c.ToJSON().Candidate}
+	candidateMsg := &protocol.ICECandidate{Candidate: c.ToJSON().Candidate}
 	signalMsg := &protocol.SignalingMessage{
 		CallId:  callID,
 		Payload: &protocol.SignalingMessage_Candidate{Candidate: candidateMsg},

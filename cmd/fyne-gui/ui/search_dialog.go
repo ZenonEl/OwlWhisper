@@ -1,23 +1,13 @@
 // Путь: cmd/fyne-gui/ui/search_dialog.go
-
 package ui
 
 import (
 	"fmt"
-	"log"
-	"strings"
-	"time"
-
-	newcore "OwlWhisper/cmd/fyne-gui/new-core"
-	protocol "OwlWhisper/cmd/fyne-gui/new-core/protocol"
-
+	// Убираем лишние импорты: time, newcore, protocol, uuid, proto, peer
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
-	"github.com/google/uuid"
-	"github.com/libp2p/go-libp2p/core/peer"
-	"google.golang.org/protobuf/proto"
 )
 
 func (ui *AppUI) ShowSearchDialog() {
@@ -36,8 +26,13 @@ func (ui *AppUI) ShowSearchDialog() {
 			if !confirm {
 				return
 			}
-
-			go ui.performSearchAndPing(searchEntry.Text)
+			// ИЗМЕНЕНО: Просто вызываем метод сервиса, передавая ему колбэки
+			// для обновления UI. UI больше не занимается сетевой логикой.
+			go ui.contactService.SearchAndVerifyContact(
+				searchEntry.Text,
+				func(status string) { ui.statusLabelText.Set(status) },                     // onStatusUpdate
+				func(err error) { ui.statusLabelText.Set(fmt.Sprintf("Ошибка: %v", err)) }, // onError
+			)
 		},
 		ui.mainWindow,
 	)
@@ -46,73 +41,4 @@ func (ui *AppUI) ShowSearchDialog() {
 	searchDialog.Show()
 }
 
-// performSearchAndPing реализует полный сценарий поиска и верификации.
-func (ui *AppUI) performSearchAndPing(address string) {
-	ui.statusLabelText.Set("Статус: Поиск...")
-
-	var targetPeer peer.AddrInfo
-	var err error
-
-	if strings.HasPrefix(address, "12D3KooW") {
-		log.Printf("INFO: [Search] Выполняется поиск по PeerID: %s", address)
-		addrInfo, findErr := ui.coreController.FindPeer(address)
-		if findErr != nil {
-			ui.statusLabelText.Set(fmt.Sprintf("Ошибка: %v", findErr))
-			return
-		}
-		targetPeer = *addrInfo
-	} else {
-		log.Printf("INFO: [Search] Выполняется поиск по никнейму: %s", address)
-		contentID, createErr := newcore.CreateContentID(address)
-		if createErr != nil {
-			ui.statusLabelText.Set(fmt.Sprintf("Ошибка: Неверный формат адреса: %v", createErr))
-			return
-		}
-
-		providers, findErr := ui.coreController.FindProvidersForContent(contentID)
-		if findErr != nil {
-			ui.statusLabelText.Set(fmt.Sprintf("Ошибка поиска: %v", findErr))
-			return
-		}
-		if len(providers) == 0 {
-			ui.statusLabelText.Set("Контакт не найден (офлайн или не существует).")
-			return
-		}
-		targetPeer = providers[0]
-	}
-
-	statusMsg := fmt.Sprintf("Контакт найден! PeerID: %s. Запрос профиля...", targetPeer.ID.ShortString())
-	ui.statusLabelText.Set(statusMsg)
-
-	// --- ИЗМЕНЕНО: Создаем Protobuf-запрос ("пинг") по новой, правильной схеме ---
-
-	// 1. Создаем самый внутренний payload
-	profileReq := &protocol.ProfileRequest{}
-
-	// 2. Оборачиваем его в ContactMessage
-	contactMsg := &protocol.ContactMessage{
-		Type: &protocol.ContactMessage_ProfileRequest{ProfileRequest: profileReq},
-	}
-
-	// 3. Оборачиваем ContactMessage в главный Envelope
-	envelope := &protocol.Envelope{
-		MessageId:     uuid.New().String(),
-		SenderId:      ui.coreController.GetMyPeerID(),
-		TimestampUnix: time.Now().Unix(),
-		Payload:       &protocol.Envelope_ContactMessage{ContactMessage: contactMsg},
-	}
-
-	data, err := proto.Marshal(envelope)
-	if err != nil {
-		ui.statusLabelText.Set(fmt.Sprintf("Ошибка: не удалось создать запрос: %v", err))
-		return
-	}
-
-	// Отправляем "пинг"
-	if err := ui.coreController.SendDataToPeer(targetPeer.ID.String(), data); err != nil {
-		ui.statusLabelText.Set(fmt.Sprintf("Ошибка: не удалось отправить запрос (контакт может быть офлайн): %v", err))
-		return
-	}
-
-	ui.statusLabelText.Set(fmt.Sprintf("Запрос профиля отправлен %s. Ожидание ответа...", targetPeer.ID.ShortString()))
-}
+// Метод performSearchAndPing УДАЛЕН. Вся его логика переезжает в ContactService.

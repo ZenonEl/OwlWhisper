@@ -31,23 +31,27 @@ type AppUI struct {
 	messages        binding.UntypedList
 	contacts        binding.UntypedList
 
-	coreController newcore.ICoreController
-	contactService *services.ContactService
-	chatService    *services.ChatService
-	fileService    *services.FileService
-	callService    *services.CallService
-	dispatcher     *services.MessageDispatcher
+	coreController  newcore.ICoreController
+	contactService  *services.ContactService
+	chatService     *services.ChatService
+	fileService     *services.FileService
+	callService     *services.CallService
+	dispatcher      *services.MessageDispatcher
+	protocolService services.IProtocolService
+	cryptoService   services.ICryptoService
+	identityService services.IIdentityService
 
 	currentChatPeerID string
 }
 
-func NewAppUI(core newcore.ICoreController) *AppUI {
+func NewAppUI(core newcore.ICoreController, protocolService services.IProtocolService, cryptoService services.ICryptoService, identityService services.IIdentityService) *AppUI {
 	a := app.NewWithID("com.owlwhisper.desktop")
 	win := a.NewWindow("Owl Whisper - Fyne GUI Test")
 
 	// 1. Сначала создаем пустую структуру AppUI
 	ui := &AppUI{
 		coreController:  core,
+		protocolService: protocolService,
 		app:             a,
 		mainWindow:      win,
 		messages:        binding.NewUntypedList(),
@@ -61,10 +65,10 @@ func NewAppUI(core newcore.ICoreController) *AppUI {
 	// --- ИНИЦИАЛИЗАЦИЯ СЕРВИСОВ ---
 
 	// 1. Создаем ContactService. Ему нужен UI для показа диалогов.
-	ui.contactService = services.NewContactService(core, ui.refreshContacts, ui)
+	ui.contactService = services.NewContactService(core, protocolService, cryptoService, identityService, ui.refreshContacts, ui)
 
 	// 2. Создаем ChatService.
-	ui.chatService = services.NewChatService(core, ui.contactService.Provider, func(newWidget fyne.CanvasObject) {
+	ui.chatService = services.NewChatService(core, protocolService, ui.contactService.Provider, func(newWidget fyne.CanvasObject) {
 		ui.messages.Append(newWidget)
 	})
 
@@ -73,14 +77,14 @@ func NewAppUI(core newcore.ICoreController) *AppUI {
 
 	// 4. Создаем CallService.
 	// ИСПРАВЛЕНО: Передаем ему callback-функцию onIncomingCall.
-	callSvc, err := services.NewCallService(core, ui.contactService, ui.OnIncomingCall)
+	callSvc, err := services.NewCallService(core, ui.contactService, protocolService, ui.OnIncomingCall)
 	if err != nil {
 		log.Fatalf("КРИТИЧЕСКАЯ ОШИБКА: Не удалось создать CallService: %v", err)
 	}
 	ui.callService = callSvc
 
 	// 5. Создаем Диспетчер, передавая ему все сервисы.
-	ui.dispatcher = services.NewMessageDispatcher(ui.contactService, ui.chatService, ui.fileService, ui.callService)
+	ui.dispatcher = services.NewMessageDispatcher(protocolService, ui.contactService, ui.chatService, ui.fileService, ui.callService)
 
 	win.SetContent(ui.buildUI())
 	win.Resize(fyne.NewSize(800, 600))
@@ -290,12 +294,13 @@ func (ui *AppUI) eventLoop() {
 	}
 }
 
-func (ui *AppUI) OnProfileReceived(senderID string, profile *protocol.ProfileInfo) {
-	ui.ShowConfirmContactDialog(profile, senderID)
+func (ui *AppUI) OnProfileReceived(senderID string, profile *protocol.ProfilePayload, fingerprint string) {
+	ui.ShowConfirmContactDialog(senderID, profile, fingerprint)
 }
 
-func (ui *AppUI) OnContactRequestReceived(senderID string, profile *protocol.ProfileInfo) {
-	ui.ShowContactRequestDialog(senderID, profile)
+// ОБНОВЛЕННАЯ СИГНАТУРА
+func (ui *AppUI) OnContactRequestReceived(senderID string, profile *protocol.ProfilePayload, fingerprint string, status services.VerificationStatus) {
+	ui.ShowContactRequestDialog(senderID, profile, fingerprint, status)
 }
 
 // refreshContacts безопасно обновляет список контактов в UI.

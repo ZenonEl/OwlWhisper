@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ipfs/go-cid"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -68,6 +69,12 @@ type StreamClosedPayload struct {
 	PeerID   string `json:"peer_id"`
 }
 
+type NewGroupMessagePayload struct {
+	Topic    string `json:"topic"`
+	SenderID string `json:"sender_id"`
+	Data     []byte `json:"data"`
+}
+
 // --- Интерфейс Контроллера (Публичный API) ---
 
 // ICoreController определяет публичный API для управления P2P-узлом.
@@ -79,6 +86,11 @@ type ICoreController interface {
 	GetConnectedPeers() []string
 	SendDataToPeer(peerID string, data []byte) error
 	BroadcastData(data []byte) error
+
+	// --- НОВЫЕ МЕТОДЫ ДЛЯ ГРУПП ---
+	JoinTopic(topic string) error
+	LeaveTopic(topic string) error
+	Publish(topic string, data []byte) error
 
 	OpenStream(peerID string, protocolID string) (uint64, error)
 	WriteToStream(streamID uint64, data []byte) error
@@ -106,6 +118,8 @@ type CoreController struct {
 	mu             sync.RWMutex
 	streamCounter  uint64                    // Простой счетчик для генерации уникальных ID
 	activeStreams  map[uint64]network.Stream // Хранилище активных стримов
+	joinedTopics   map[string]*pubsub.Topic
+	subscriptions  map[string]*pubsub.Subscription
 }
 
 // NewCoreController - конструктор для нашего контроллера.
@@ -116,9 +130,11 @@ func NewCoreController(privKey crypto.PrivKey, cfg Config) (ICoreController, err
 		cancel:         cancel,
 		cfg:            cfg,
 		privKey:        privKey,
-		eventChan:      make(chan Event, 100), // Буферизированный канал
+		eventChan:      make(chan Event, 100),
 		connectedPeers: make(map[peer.ID]bool),
 		activeStreams:  make(map[uint64]network.Stream),
+		joinedTopics:   make(map[string]*pubsub.Topic),
+		subscriptions:  make(map[string]*pubsub.Subscription),
 	}, nil
 }
 
@@ -433,6 +449,100 @@ func (n *networkNotifee) Disconnected(net network.Network, conn network.Conn) {
 	delete(n.c.connectedPeers, peerID)
 	n.c.mu.Unlock()
 	n.c.pushEvent("PeerDisconnected", PeerStatusPayload{PeerID: peerID.String()})
+}
+
+// JoinTopic подписывает узел на тему (групповой чат).
+func (c *CoreController) JoinTopic(topic string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Проверяем, не подписаны ли мы уже
+	if _, ok := c.joinedTopics[topic]; ok {
+		return nil // Уже в группе
+	}
+
+	// Получаем или создаем объект Topic
+	topicHandle, err := c.node.PubSub().Join(topic)
+	if err != nil {
+		return fmt.Errorf("не удалось присоединиться к топику '%s': %w", topic, err)
+	}
+	c.joinedTopics[topic] = topicHandle
+
+	// Подписываемся на сообщения в этом топике
+	subscription, err := topicHandle.Subscribe()
+	if err != nil {
+		return fmt.Errorf("не удалось подписаться на сообщения в топике '%s': %w", topic, err)
+	}
+	c.subscriptions[topic] = subscription
+
+	// Запускаем горутину, которая будет слушать сообщения из этой подписки
+	go c.handleTopicSubscription(subscription)
+
+	Info("[PubSub] Успешно присоединились к группе: %s", topic)
+	return nil
+}
+
+// LeaveTopic отписывает узел от темы.
+func (c *CoreController) LeaveTopic(topic string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Отменяем подписку
+	if sub, ok := c.subscriptions[topic]; ok {
+		sub.Cancel()
+		delete(c.subscriptions, topic)
+	}
+
+	// Закрываем топик
+	if topicHandle, ok := c.joinedTopics[topic]; ok {
+		delete(c.joinedTopics, topic)
+		return topicHandle.Close()
+	}
+
+	Info("[PubSub] Покинули группу: %s", topic)
+	return nil
+}
+
+// Publish отправляет сообщение в указанную тему (группу).
+func (c *CoreController) Publish(topic string, data []byte) error {
+	c.mu.RLock()
+	topicHandle, ok := c.joinedTopics[topic]
+	c.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("нельзя опубликовать сообщение, вы не в группе '%s'", topic)
+	}
+
+	return topicHandle.Publish(c.ctx, data)
+}
+
+// ДОБАВИТЬ НОВЫЙ helper-метод для обработки сообщений из подписки
+func (c *CoreController) handleTopicSubscription(sub *pubsub.Subscription) {
+	defer sub.Cancel()
+
+	for {
+		msg, err := sub.Next(c.ctx)
+		if err != nil {
+			// Если контекст отменен, это нормальное завершение
+			if c.ctx.Err() != nil {
+				return
+			}
+			Error("[PubSub] Ошибка получения сообщения из подписки для топика %s: %v", sub.Topic(), err)
+			return
+		}
+
+		// Игнорируем свои собственные сообщения
+		if msg.ReceivedFrom == c.node.Host().ID() {
+			continue
+		}
+
+		// Отправляем событие в GUI
+		c.pushEvent("NewGroupMessage", NewGroupMessagePayload{
+			Topic:    sub.Topic(),
+			SenderID: msg.ReceivedFrom.String(),
+			Data:     msg.Data,
+		})
+	}
 }
 
 // Пустые реализации остальных методов интерфейса

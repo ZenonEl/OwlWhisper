@@ -85,31 +85,33 @@ type ContactUIManager interface {
 
 // ContactService управляет всей бизнес-логикой, связанной с контактами.
 type ContactService struct {
-	core      newcore.ICoreController
-	Provider  ContactProvider
-	onUpdate  func()   // Callback для обновления UI
-	myProfile *Contact // Профиль текущего пользователя
-	uiManager ContactUIManager
+	core            newcore.ICoreController
+	protocolService IProtocolService // <-- НОВАЯ ЗАВИСИМОСТЬ
+	cryptoService   ICryptoService   // <-- НОВАЯ ЗАВИСИМОСТЬ
+	identityService IIdentityService // <-- НОВАЯ ЗАВИСИМОСТЬ
+	Provider        ContactProvider
+	onUpdate        func()   // Callback для обновления UI
+	myProfile       *Contact // Профиль текущего пользователя
+	uiManager       ContactUIManager
 }
 
-func NewContactService(core newcore.ICoreController, onUpdate func(), uiManager ContactUIManager) *ContactService {
-	// Создаем наш профиль на основе данных из Core
-	myProfile := &Contact{
-		PeerID:        "загрузка...",
-		Nickname:      "Me",     // Временное имя
-		Discriminator: "xxxxxx", // Временный дискриминатор
-		Status:        StatusOnline,
-		IsSelf:        true,
-	}
-
+func NewContactService(core newcore.ICoreController, protoSvc IProtocolService, cryptoSvc ICryptoService, idSvc IIdentityService, onUpdate func(), uiManager ContactUIManager) *ContactService {
 	cs := &ContactService{
-		core:      core,
-		Provider:  NewInMemoryContactProvider(),
-		onUpdate:  onUpdate,
-		myProfile: myProfile,
-		uiManager: uiManager,
+		core:            core,
+		protocolService: protoSvc,
+		cryptoService:   cryptoSvc,
+		identityService: idSvc,
+		Provider:        NewInMemoryContactProvider(),
+		onUpdate:        onUpdate,
+		uiManager:       uiManager,
 	}
-
+	// Добавляем себя в список контактов из IdentityService
+	cs.Provider.AddContact(&Contact{
+		PeerID:   idSvc.GetMyPeerID(),
+		Nickname: idSvc.GetMyNickname(),
+		Status:   StatusOnline,
+		IsSelf:   true,
+	})
 	return cs
 }
 
@@ -225,50 +227,61 @@ func (cs *ContactService) UpdateContactStatus(peerID string, status ContactStatu
 }
 
 // SendContactRequest (Фаза 3)
-func (cs *ContactService) SendContactRequest(recipientID string, myProfile *Contact) {
-	// Создаем Protobuf-запрос с нашим профилем
-	req := &protocol.ContactRequest{
-		SenderProfile: &protocol.ProfileInfo{
-			Nickname:      myProfile.Nickname,
-			Discriminator: myProfile.Discriminator,
-		},
-	}
+// ПЕРЕИМЕНОВАН И ПОЛНОСТЬЮ ПЕРЕПИСАН: SendContactRequest -> InitiateNewChat
+func (cs *ContactService) InitiateNewChat(recipientPeerID string, recipientPublicKey []byte) error {
+	// 1. Получаем нашу собственную идентификацию
+	myIdentityProto := cs.identityService.GetMyIdentityPublicKeyProto()
 
-	contactMsg := &protocol.ContactMessage{
-		Type: &protocol.ContactMessage_ContactRequest{ContactRequest: req},
+	// 2. Формируем список участников будущего чата
+	recipientIdentityProto := &protocol.IdentityPublicKey{
+		KeyType:   protocol.KeyType_ED25519,
+		PublicKey: recipientPublicKey,
 	}
+	initialMembers := []*protocol.IdentityPublicKey{myIdentityProto, recipientIdentityProto}
 
-	envelope := &protocol.Envelope{
-		MessageId:     uuid.New().String(),
-		SenderId:      cs.myProfile.PeerID,
-		TimestampUnix: time.Now().Unix(),
-		Payload:       &protocol.Envelope_ContactMessage{ContactMessage: contactMsg},
-	}
+	// 3. Создаем ID контекста (чата). Это должно быть детерминировано.
+	// Например, хеш от отсортированных публичных ключей.
+	// TODO: Вынести эту логику в отдельный helper
+	contextID := uuid.New().String() // Временная заглушка
 
-	data, err := proto.Marshal(envelope)
+	// 4. Создаем внутреннюю, неподписанную команду
+	commandData, err := cs.protocolService.CreateCommand_InitiateContext(contextID, 1, initialMembers)
 	if err != nil {
-		log.Printf("ERROR: [ContactService] Ошибка Marshal при создании ContactRequest: %v", err)
-		return
+		return fmt.Errorf("ошибка создания InitiateContext: %w", err)
 	}
 
-	// Добавляем контакт в нашу БД со статусом "ожидает"
-	pendingContact := &Contact{
-		PeerID: recipientID,
-		// Мы пока не знаем его ник, поэтому используем временные данные
-		Nickname:      "Pending...",
-		Discriminator: recipientID[len(recipientID)-6:],
-		// ИСПРАВЛЕНО: Убираем префикс `services.`
-		Status: StatusAwaitingApproval,
+	// 5. Подписываем данные команды нашим приватным ключом
+	signature, err := cs.cryptoService.Sign(commandData)
+	if err != nil {
+		return fmt.Errorf("ошибка подписи команды: %w", err)
 	}
-	// ИСПРАВЛЕНО: Используем публичное поле `Provider`
-	cs.Provider.AddContact(pendingContact)
-	cs.onUpdate() // Обновляем UI, чтобы показать "pending" контакт
 
-	log.Printf("INFO: [ContactService] Отправка ContactRequest пиру %s", recipientID[:8])
-	if err := cs.core.SendDataToPeer(recipientID, data); err != nil {
-		log.Printf("ERROR: [ContactService] Не удалось отправить ContactRequest: %v", err)
+	// 6. Собираем финальную, подписанную команду
+	signedCommandBytes, err := cs.protocolService.CreateSignedCommand(myIdentityProto, commandData, signature)
+	if err != nil {
+		return fmt.Errorf("ошибка сборки SignedCommand: %w", err)
 	}
+
+	// 7. Отправляем команду получателю
+	log.Printf("INFO: [ContactService] Отправка команды InitiateContext пиру %s", recipientPeerID[:8])
+	return cs.core.SendDataToPeer(recipientPeerID, signedCommandBytes)
 }
+
+// HandleInitiateContext - заглушка для нового метода, вызываемого диспетчером
+
+// ОБНОВЛЕННАЯ СИГНАТУРА: HandleInitiateContext
+func (cs *ContactService) HandleInitiateContext(senderID string, cmd *protocol.SignedCommand, payload *protocol.InitiateContext) {
+	log.Printf("INFO: [ContactService] Получена команда InitiateContext от %s. Содержит %d участников.", senderID, len(payload.InitialMembers))
+	// Здесь в будущем будет вызов TrustService для проверки подписи
+	// и последующий вызов UIManager для отображения диалога.
+}
+
+// ОБНОВЛЕННАЯ СИГНАТУРА: HandleDiscloseProfile (пока закомментировано, так как типа нет)
+//
+//	func (cs *ContactService) HandleDiscloseProfile(senderID string, cmd *protocol.SignedCommand, payload *protocol.DiscloseProfile) {
+//		log.Printf("INFO: [ContactService] Получена команда DiscloseProfile от %s.", senderID)
+//		// Здесь будет вызов TrustService.VerifyPeerID и UIManager.OnProfileReceived
+//	}
 
 // RespondToProfileRequest отправляет наш профиль в ответ на "пинг".
 func (cs *ContactService) RespondToProfileRequest(recipientID string) {
