@@ -6,6 +6,13 @@ package protocol;
 import "identity.proto";
 
 option go_package = "./";
+
+// DiscloseProfile - это ответ на "пинг", содержащий публичную информацию
+// о пользователе. Передается внутри SignedCommand для доказательства подлинности.
+message DiscloseProfile {
+  ProfilePayload profile = 1;
+}
+
 // SignedCommand - это внешний конверт для любой команды, изменяющей состояние.
 // Он обеспечивает аутентичность и целостность.
 message SignedCommand {
@@ -38,6 +45,7 @@ message Command {
   oneof payload {
     // === Команды, общие для всех контекстов ===
     InitiateContext initiate_context = 10; // Начать новый чат (1:1 или группу)
+    DiscloseProfile disclose_profile = 11; // НОВАЯ КОМАНДА: Раскрыть свой профиль в ответ на пинг
 
     // === Команды, специфичные для групп ===
     AddMembers add_members = 20;

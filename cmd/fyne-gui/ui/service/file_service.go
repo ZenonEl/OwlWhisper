@@ -464,7 +464,7 @@ func (fs *FileService) streamFileProcessor(state *TransferState) {
 			continue
 		}
 
-		if chunk.LastChunk {
+		if chunk.IsLastChunk {
 			log.Printf("INFO: [FileService] Получен последний 'кусок' для %s. Завершение.", state.Metadata.Filename)
 			// Мы получили сигнал о конце. Выходим из цикла чтения.
 			// Проверка хеша будет после выхода из цикла.

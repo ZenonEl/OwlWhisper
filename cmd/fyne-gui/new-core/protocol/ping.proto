@@ -1,0 +1,26 @@
+// Путь: internal/protocol/ping.proto
+syntax = "proto3";
+
+package protocol;
+
+import "identity.proto";
+
+option go_package = "./";
+
+// PingEnvelope - это обертка для простых, неподписанных и нешифрованных
+// сообщений, используемых для обнаружения и запроса информации.
+message PingEnvelope {
+    oneof payload {
+        ProfileRequest profile_request = 1;
+        // В будущем здесь могут быть другие типы "пингов"
+    }
+}
+
+// ProfileRequest - это "пинг" с просьбой прислать в ответ
+// подписанную команду DiscloseProfile.
+message ProfileRequest {
+  // Нам нужно передать информацию об отправителе, чтобы получатель
+  // знал, кому отвечать и мог проверить его в будущем.
+    IdentityPublicKey sender_identity = 1;
+    string sender_peer_id = 2;
+}

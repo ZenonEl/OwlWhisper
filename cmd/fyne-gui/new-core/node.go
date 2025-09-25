@@ -9,6 +9,7 @@ import (
 
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -27,8 +28,9 @@ import (
 
 // Node представляет собой полностью инкапсулированный узел libp2p.
 type Node struct {
-	host host.Host
-	cfg  Config // Храним копию конфигурации, с которой был запущен узел
+	host   host.Host
+	cfg    Config // Храним копию конфигурации, с которой был запущен узел
+	pubsub *pubsub.PubSub
 }
 
 // NewNode создает, конфигурирует и запускает новый узел OwlWhisper.
@@ -114,9 +116,15 @@ func NewNode(ctx context.Context, privKey crypto.PrivKey, cfg Config) (*Node, er
 		return nil, fmt.Errorf("не удалось создать libp2p узел: %w", err)
 	}
 
+	ps, err := pubsub.NewGossipSub(ctx, host)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось создать GossipSub: %w", err)
+	}
+
 	node := &Node{
-		host: host,
-		cfg:  cfg,
+		host:   host,
+		cfg:    cfg,
+		pubsub: ps, // Сохраняем экземпляр PubSub
 	}
 
 	return node, nil
@@ -127,6 +135,10 @@ func NewNode(ctx context.Context, privKey crypto.PrivKey, cfg Config) (*Node, er
 // взаимодействовать с ним.
 func (n *Node) Host() host.Host {
 	return n.host
+}
+
+func (n *Node) PubSub() *pubsub.PubSub {
+	return n.pubsub
 }
 
 // Close корректно останавливает узел.

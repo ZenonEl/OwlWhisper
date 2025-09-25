@@ -1,115 +1,156 @@
 // Путь: cmd/fyne-gui/services/dispatcher.go
-
 package services
 
 import (
 	"log"
 
 	protocol "OwlWhisper/cmd/fyne-gui/new-core/protocol"
-
-	"google.golang.org/protobuf/proto"
 )
 
 // MessageDispatcher десериализует и маршрутизирует входящие сообщения.
 type MessageDispatcher struct {
-	contactService *ContactService
-	chatService    *ChatService
-	fileService    *FileService
-	callService    *CallService
+	protocolService IProtocolService
+	contactService  *ContactService
+	chatService     *ChatService
+	fileService     *FileService
+	callService     *CallService
 }
 
-type AppUIProvider interface {
-	OnProfileReceived(senderID string, profile *protocol.ProfileInfo)
-	// В будущем здесь будут другие методы, например, OnContactRequestReceived
-}
-
-func NewMessageDispatcher(cs *ContactService, chs *ChatService, fs *FileService, cls *CallService) *MessageDispatcher {
+// Конструктор остается прежним
+func NewMessageDispatcher(protoSvc IProtocolService, cs *ContactService, chs *ChatService, fs *FileService, cls *CallService) *MessageDispatcher {
 	return &MessageDispatcher{
-		contactService: cs,
-		chatService:    chs,
-		fileService:    fs,
-		callService:    cls,
+		protocolService: protoSvc,
+		contactService:  cs,
+		chatService:     chs,
+		fileService:     fs,
+		callService:     cls,
 	}
 }
 
-// HandleIncomingData - это главный метод, который принимает сырые байты от Core.
+// ПОЛНОСТЬЮ ОБНОВЛЕННЫЙ МЕТОД
 func (d *MessageDispatcher) HandleIncomingData(senderID string, data []byte) {
-	// 1. Пытаемся десериализовать данные в наш главный "конверт".
-	envelope := &protocol.Envelope{}
-	if err := proto.Unmarshal(data, envelope); err != nil {
-		log.Printf("WARN: [Dispatcher] Не удалось распознать Envelope от %s: %v", senderID, err)
+	// Попытка №1: SecureEnvelope (конфиденциальные данные чата)
+	envelope, err := d.protocolService.ParseSecureEnvelope(data)
+	if err == nil {
+		d.handleSecureEnvelope(senderID, envelope)
 		return
 	}
 
-	// 2. ИЗМЕНЕНО: Проверяем, какой тип полезной нагрузки внутри:
-	// сообщение для чата или для управления контактами.
-	switch payload := envelope.Payload.(type) {
-	case *protocol.Envelope_ChatMessage:
-		// Это сообщение для чата, обрабатываем его контент.
-		d.handleChatMessage(senderID, payload.ChatMessage)
+	// Попытка №2: SignedCommand (управляющие команды)
+	signedCmd, err := d.protocolService.ParseSignedCommand(data)
+	if err == nil {
+		d.handleSignedCommand(senderID, signedCmd)
+		return
+	}
 
-	case *protocol.Envelope_ContactMessage:
-		// Это сообщение для управления контактами.
-		d.handleContactMessage(senderID, payload.ContactMessage)
-
-	case *protocol.Envelope_SignalingMessage:
-		// Это сигнальное сообщение для звонка. Передаем его в CallService.
+	// Попытка №3: SignalingMessage (WebRTC сигнализация)
+	signalingMsg, err := d.protocolService.ParseSignalingMessage(data)
+	if err == nil {
 		log.Printf("INFO: [Dispatcher] Получено SignalingMessage от %s", senderID)
-		d.callService.HandleSignalingMessage(senderID, payload.SignalingMessage)
+		d.callService.HandleSignalingMessage(senderID, signalingMsg)
+		return
+	}
+
+	// Если ничего не подошло - логируем ошибку.
+	log.Printf("WARN: [Dispatcher] Не удалось распознать входящее сообщение от %s", senderID)
+}
+
+// НОВЫЙ МЕТОД: Обработка и маршрутизация SignedCommand
+func (d *MessageDispatcher) handleSignedCommand(senderID string, signedCmd *protocol.SignedCommand) {
+	innerCmd, err := d.protocolService.ParseCommand(signedCmd.CommandData)
+	if err != nil {
+		log.Printf("WARN: [Dispatcher] Не удалось распарсить CommandData от %s: %v", senderID, err)
+		return
+	}
+
+	// Маршрутизируем команду, передавая конкретный payload в сервис
+	switch payload := innerCmd.Payload.(type) {
+	case *protocol.Command_InitiateContext:
+		log.Printf("INFO: [Dispatcher] Получена команда InitiateContext от %s", senderID)
+		// ИСПРАВЛЕНО: Передаем конкретный payload `payload.InitiateContext`
+		d.contactService.HandleInitiateContext(senderID, signedCmd, payload.InitiateContext)
+
+	// --- МЕСТО ДЛЯ БУДУЩИХ КОМАНД ---
+	case *protocol.Command_AddMembers:
+		log.Printf("INFO: [Dispatcher] Получена команда AddMembers от %s", senderID)
+		// d.groupService.HandleAddMembers(senderID, signedCmd, payload.AddMembers)
+	case *protocol.Command_RemoveMembers:
+		log.Printf("INFO: [Dispatcher] Получена команда RemoveMembers от %s", senderID)
+		// d.groupService.HandleRemoveMembers(senderID, signedCmd, payload.RemoveMembers)
+
+	// TODO: Добавить case для DiscloseProfile, когда мы добавим его в .proto
+	// case *protocol.Command_DiscloseProfile:
+	// 	 log.Printf("INFO: [Dispatcher] Получена команда DiscloseProfile от %s", senderID)
+	// 	 d.contactService.HandleDiscloseProfile(senderID, signedCmd, payload.DiscloseProfile)
 
 	default:
-		log.Printf("WARN: [Dispatcher] Получен Envelope с неизвестным типом payload от %s", senderID)
+		log.Printf("WARN: [Dispatcher] Получена SignedCommand с неизвестным типом payload от %s", senderID)
 	}
 }
 
-// handleChatMessage обрабатывает сообщения, относящиеся к чатам.
-func (d *MessageDispatcher) handleChatMessage(senderID string, msg *protocol.ChatMessage) {
-	switch content := msg.Content.(type) {
-	case *protocol.ChatMessage_Text:
-		d.chatService.ProcessTextMessage(senderID, content.Text)
+// Метод handleSecureEnvelope и его помощники остаются без изменений.
+// ... (handleSecureEnvelope, handleChatContent, handleFileControl) ...
+// Путь: cmd/fyne-gui/services/dispatcher.go
+func (d *MessageDispatcher) handleSecureEnvelope(senderID string, envelope *protocol.SecureEnvelope) {
+	// !!! ЗАГЛУШКА ДЛЯ РАСШИФРОВКИ !!!
+	// В будущем здесь будет вызов cryptoService.Decrypt(envelope.Ciphertext)
+	// А пока считаем, что ciphertext - это и есть plaintext.
+	plaintext := envelope.Ciphertext
 
-	case *protocol.ChatMessage_FileAnnouncement:
-		log.Printf("INFO: [Dispatcher] Получен анонс файла от %s", senderID)
+	// Маршрутизируем в зависимости от типа полезной нагрузки
+	switch envelope.PayloadType {
+	case "protocol.ChatContent":
+		content, err := d.protocolService.ParseChatContent(plaintext)
+		if err != nil {
+			log.Printf("WARN: [Dispatcher] Ошибка парсинга ChatContent от %s: %v", senderID, err)
+			return
+		}
+		d.handleChatContent(senderID, content)
 
-		card, err := d.fileService.HandleFileAnnouncement(senderID, content.FileAnnouncement)
+	case "protocol.FileControl":
+		content, err := d.protocolService.ParseFileControl(plaintext)
+		if err != nil {
+			log.Printf("WARN: [Dispatcher] Ошибка парсинга FileControl от %s: %v", senderID, err)
+			return
+		}
+		d.handleFileControl(senderID, content)
+
+	default:
+		log.Printf("WARN: [Dispatcher] Получен SecureEnvelope с неизвестным PayloadType '%s' от %s", envelope.PayloadType, senderID)
+	}
+}
+
+func (d *MessageDispatcher) handleChatContent(senderID string, content *protocol.ChatContent) {
+	switch payload := content.Payload.(type) {
+	case *protocol.ChatContent_Text:
+		d.chatService.ProcessTextMessage(senderID, payload.Text)
+
+	case *protocol.ChatContent_File:
+		log.Printf("INFO: [Dispatcher] Получен анонс файла (FileMetadata) от %s", senderID)
+		card, err := d.fileService.HandleFileAnnouncement(senderID, payload.File)
 		if err == nil && card != nil {
 			d.chatService.ProcessWidgetMessage(card)
 		}
 
-	// --- НОВЫЕ КЕЙСЫ ---
-	case *protocol.ChatMessage_FileRequest:
-		log.Printf("INFO: [Dispatcher] Получен запрос на скачивание файла от %s", senderID)
-		d.fileService.HandleDownloadRequest(content.FileRequest, senderID)
-
-	case *protocol.ChatMessage_FileStatus:
-		// TODO: Обработка статусов (файл недоступен и т.д.)
-
-	case *protocol.ChatMessage_ReadReceipts:
+	case *protocol.ChatContent_Receipts:
 		// TODO: Обработка статусов прочтения
+	case *protocol.ChatContent_Edit:
+		// TODO: Обработка редактирования
+	case *protocol.ChatContent_Delete:
+		// TODO: Обработка удаления
 	}
 }
 
-// handleContactMessage обрабатывает сообщения для управления контактами.
-func (d *MessageDispatcher) handleContactMessage(senderID string, msg *protocol.ContactMessage) {
-	switch typ := msg.Type.(type) {
-	case *protocol.ContactMessage_ProfileRequest:
-		// Нас "пингуют" с запросом профиля. Нужно ответить.
-		log.Printf("INFO: [Dispatcher] Получен ProfileRequest от %s", senderID)
-		d.contactService.RespondToProfileRequest(senderID)
+func (d *MessageDispatcher) handleFileControl(senderID string, content *protocol.FileControl) {
+	switch payload := content.Payload.(type) {
+	case *protocol.FileControl_Request:
+		log.Printf("INFO: [Dispatcher] Получен запрос на скачивание файла от %s", senderID)
+		d.fileService.HandleDownloadRequest(payload.Request, senderID)
 
-	case *protocol.ContactMessage_ProfileResponse:
-		// Нам прислали ответ с профилем. Передаем его в ContactService.
-		log.Printf("INFO: [Dispatcher] Получен ProfileResponse от %s", senderID)
-		d.contactService.HandleProfileResponse(senderID, typ.ProfileResponse)
+	case *protocol.FileControl_Status:
+		// TODO: Обработка статусов (файл недоступен и т.д.)
 
-	case *protocol.ContactMessage_ContactRequest:
-		// Обрабатываем запрос на добавление в контакты
-		log.Printf("INFO: [Dispatcher] Получен ContactRequest от %s", senderID)
-		d.contactService.HandleContactRequest(senderID, typ.ContactRequest)
-
-	case *protocol.ContactMessage_ContactAccept:
-		// Обрабатываем подтверждение дружбы
-		log.Printf("INFO: [Dispatcher] Получен ContactAccept от %s", senderID)
-		d.contactService.HandleContactAccept(senderID, typ.ContactAccept)
+	case *protocol.FileControl_SeederUpdate:
+		// TODO: Обработка появления нового сида
 	}
 }
