@@ -2,8 +2,9 @@
 package ui
 
 import (
-	protocol "OwlWhisper/cmd/fyne-gui/new-core/protocol"
 	"fmt"
+
+	protocol "OwlWhisper/cmd/fyne-gui/new-core/protocol"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -17,7 +18,8 @@ type FileCard struct {
 	onDownload func(metadata *protocol.FileMetadata)
 }
 
-func NewFileCard(metadata *protocol.FileMetadata, onDownload func(*protocol.FileMetadata)) *FileCard {
+// NewFileCardWidget создает новый экземпляр FileCard.
+func NewFileCardWidget(metadata *protocol.FileMetadata, onDownload func(*protocol.FileMetadata)) *FileCard {
 	card := &FileCard{
 		metadata:   metadata,
 		onDownload: onDownload,
@@ -26,20 +28,20 @@ func NewFileCard(metadata *protocol.FileMetadata, onDownload func(*protocol.File
 	return card
 }
 
+// CreateRenderer создает "рендерер" для нашего виджета.
 func (c *FileCard) CreateRenderer() fyne.WidgetRenderer {
 	filename := widget.NewLabel(c.metadata.Filename)
 	filename.TextStyle.Bold = true
 
-	size := float64(c.metadata.SizeBytes) / 1024.0 / 1024.0 // в МБ
-	sizeLabel := widget.NewLabel(fmt.Sprintf("%.2f MB", size))
+	sizeMB := float64(c.metadata.SizeBytes) / 1024.0 / 1024.0
+	sizeLabel := widget.NewLabel(fmt.Sprintf("%.2f MB", sizeMB))
 
 	downloadButton := widget.NewButton("Скачать", func() {
-		c.onDownload(c.metadata)
+		if c.onDownload != nil {
+			c.onDownload(c.metadata)
+		}
 	})
 
-	return widget.NewSimpleRenderer(container.NewVBox(
-		filename,
-		sizeLabel,
-		downloadButton,
-	))
+	content := container.NewVBox(filename, sizeLabel, downloadButton)
+	return widget.NewSimpleRenderer(content)
 }

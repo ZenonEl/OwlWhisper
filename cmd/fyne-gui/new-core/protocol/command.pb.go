@@ -154,6 +154,7 @@ type Command struct {
 	//
 	//	*Command_InitiateContext
 	//	*Command_DiscloseProfile
+	//	*Command_AcknowledgeContext
 	//	*Command_AddMembers
 	//	*Command_RemoveMembers
 	//	*Command_PromoteAdmins
@@ -231,6 +232,15 @@ func (x *Command) GetDiscloseProfile() *DiscloseProfile {
 	return nil
 }
 
+func (x *Command) GetAcknowledgeContext() *AcknowledgeContext {
+	if x != nil {
+		if x, ok := x.Payload.(*Command_AcknowledgeContext); ok {
+			return x.AcknowledgeContext
+		}
+	}
+	return nil
+}
+
 func (x *Command) GetAddMembers() *AddMembers {
 	if x != nil {
 		if x, ok := x.Payload.(*Command_AddMembers); ok {
@@ -271,6 +281,10 @@ type Command_DiscloseProfile struct {
 	DiscloseProfile *DiscloseProfile `protobuf:"bytes,11,opt,name=disclose_profile,json=discloseProfile,proto3,oneof"` // НОВАЯ КОМАНДА: Раскрыть свой профиль в ответ на пинг
 }
 
+type Command_AcknowledgeContext struct {
+	AcknowledgeContext *AcknowledgeContext `protobuf:"bytes,12,opt,name=acknowledge_context,json=acknowledgeContext,proto3,oneof"`
+}
+
 type Command_AddMembers struct {
 	// === Команды, специфичные для групп ===
 	AddMembers *AddMembers `protobuf:"bytes,20,opt,name=add_members,json=addMembers,proto3,oneof"`
@@ -288,6 +302,8 @@ func (*Command_InitiateContext) isCommand_Payload() {}
 
 func (*Command_DiscloseProfile) isCommand_Payload() {}
 
+func (*Command_AcknowledgeContext) isCommand_Payload() {}
+
 func (*Command_AddMembers) isCommand_Payload() {}
 
 func (*Command_RemoveMembers) isCommand_Payload() {}
@@ -301,7 +317,8 @@ type InitiateContext struct {
 	InitialMembers []*IdentityPublicKey `protobuf:"bytes,1,rep,name=initial_members,json=initialMembers,proto3" json:"initial_members,omitempty"`
 	// Политика чата (например, "только админы могут добавлять участников").
 	// Можно определить позже.
-	Policy        []byte `protobuf:"bytes,2,opt,name=policy,proto3" json:"policy,omitempty"`
+	Policy        []byte          `protobuf:"bytes,2,opt,name=policy,proto3" json:"policy,omitempty"`
+	SenderProfile *ProfilePayload `protobuf:"bytes,3,opt,name=sender_profile,json=senderProfile,proto3" json:"sender_profile,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -350,6 +367,60 @@ func (x *InitiateContext) GetPolicy() []byte {
 	return nil
 }
 
+func (x *InitiateContext) GetSenderProfile() *ProfilePayload {
+	if x != nil {
+		return x.SenderProfile
+	}
+	return nil
+}
+
+// AcknowledgeContext - это ответная команда для подтверждения участия
+// в новом контексте (чате).
+type AcknowledgeContext struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Профиль отвечающего, чтобы инициатор мог его сохранить.
+	SenderProfile *ProfilePayload `protobuf:"bytes,1,opt,name=sender_profile,json=senderProfile,proto3" json:"sender_profile,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AcknowledgeContext) Reset() {
+	*x = AcknowledgeContext{}
+	mi := &file_command_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AcknowledgeContext) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AcknowledgeContext) ProtoMessage() {}
+
+func (x *AcknowledgeContext) ProtoReflect() protoreflect.Message {
+	mi := &file_command_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AcknowledgeContext.ProtoReflect.Descriptor instead.
+func (*AcknowledgeContext) Descriptor() ([]byte, []int) {
+	return file_command_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *AcknowledgeContext) GetSenderProfile() *ProfilePayload {
+	if x != nil {
+		return x.SenderProfile
+	}
+	return nil
+}
+
 // AddMembers добавляет новых участников в существующий контекст (группу).
 type AddMembers struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -360,7 +431,7 @@ type AddMembers struct {
 
 func (x *AddMembers) Reset() {
 	*x = AddMembers{}
-	mi := &file_command_proto_msgTypes[4]
+	mi := &file_command_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -372,7 +443,7 @@ func (x *AddMembers) String() string {
 func (*AddMembers) ProtoMessage() {}
 
 func (x *AddMembers) ProtoReflect() protoreflect.Message {
-	mi := &file_command_proto_msgTypes[4]
+	mi := &file_command_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -385,7 +456,7 @@ func (x *AddMembers) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddMembers.ProtoReflect.Descriptor instead.
 func (*AddMembers) Descriptor() ([]byte, []int) {
-	return file_command_proto_rawDescGZIP(), []int{4}
+	return file_command_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *AddMembers) GetMembersToAdd() []*IdentityPublicKey {
@@ -405,7 +476,7 @@ type RemoveMembers struct {
 
 func (x *RemoveMembers) Reset() {
 	*x = RemoveMembers{}
-	mi := &file_command_proto_msgTypes[5]
+	mi := &file_command_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -417,7 +488,7 @@ func (x *RemoveMembers) String() string {
 func (*RemoveMembers) ProtoMessage() {}
 
 func (x *RemoveMembers) ProtoReflect() protoreflect.Message {
-	mi := &file_command_proto_msgTypes[5]
+	mi := &file_command_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -430,7 +501,7 @@ func (x *RemoveMembers) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveMembers.ProtoReflect.Descriptor instead.
 func (*RemoveMembers) Descriptor() ([]byte, []int) {
-	return file_command_proto_rawDescGZIP(), []int{5}
+	return file_command_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *RemoveMembers) GetMembersToRemove() []*IdentityPublicKey {
@@ -450,7 +521,7 @@ type PromoteAdmins struct {
 
 func (x *PromoteAdmins) Reset() {
 	*x = PromoteAdmins{}
-	mi := &file_command_proto_msgTypes[6]
+	mi := &file_command_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -462,7 +533,7 @@ func (x *PromoteAdmins) String() string {
 func (*PromoteAdmins) ProtoMessage() {}
 
 func (x *PromoteAdmins) ProtoReflect() protoreflect.Message {
-	mi := &file_command_proto_msgTypes[6]
+	mi := &file_command_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -475,7 +546,7 @@ func (x *PromoteAdmins) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PromoteAdmins.ProtoReflect.Descriptor instead.
 func (*PromoteAdmins) Descriptor() ([]byte, []int) {
-	return file_command_proto_rawDescGZIP(), []int{6}
+	return file_command_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *PromoteAdmins) GetMembersToPromote() []*IdentityPublicKey {
@@ -495,22 +566,26 @@ const file_command_proto_rawDesc = "" +
 	"\rSignedCommand\x12D\n" +
 	"\x0fauthor_identity\x18\x01 \x01(\v2\x1b.protocol.IdentityPublicKeyR\x0eauthorIdentity\x12!\n" +
 	"\fcommand_data\x18\x02 \x01(\fR\vcommandData\x12\x1c\n" +
-	"\tsignature\x18\x03 \x01(\fR\tsignature\"\xa9\x03\n" +
+	"\tsignature\x18\x03 \x01(\fR\tsignature\"\xfa\x03\n" +
 	"\aCommand\x12\x1d\n" +
 	"\n" +
 	"context_id\x18\x01 \x01(\tR\tcontextId\x12'\n" +
 	"\x0fsequence_number\x18\x02 \x01(\x04R\x0esequenceNumber\x12F\n" +
 	"\x10initiate_context\x18\n" +
 	" \x01(\v2\x19.protocol.InitiateContextH\x00R\x0finitiateContext\x12F\n" +
-	"\x10disclose_profile\x18\v \x01(\v2\x19.protocol.DiscloseProfileH\x00R\x0fdiscloseProfile\x127\n" +
+	"\x10disclose_profile\x18\v \x01(\v2\x19.protocol.DiscloseProfileH\x00R\x0fdiscloseProfile\x12O\n" +
+	"\x13acknowledge_context\x18\f \x01(\v2\x1c.protocol.AcknowledgeContextH\x00R\x12acknowledgeContext\x127\n" +
 	"\vadd_members\x18\x14 \x01(\v2\x14.protocol.AddMembersH\x00R\n" +
 	"addMembers\x12@\n" +
 	"\x0eremove_members\x18\x15 \x01(\v2\x17.protocol.RemoveMembersH\x00R\rremoveMembers\x12@\n" +
 	"\x0epromote_admins\x18\x16 \x01(\v2\x17.protocol.PromoteAdminsH\x00R\rpromoteAdminsB\t\n" +
-	"\apayload\"o\n" +
+	"\apayload\"\xb0\x01\n" +
 	"\x0fInitiateContext\x12D\n" +
 	"\x0finitial_members\x18\x01 \x03(\v2\x1b.protocol.IdentityPublicKeyR\x0einitialMembers\x12\x16\n" +
-	"\x06policy\x18\x02 \x01(\fR\x06policy\"O\n" +
+	"\x06policy\x18\x02 \x01(\fR\x06policy\x12?\n" +
+	"\x0esender_profile\x18\x03 \x01(\v2\x18.protocol.ProfilePayloadR\rsenderProfile\"U\n" +
+	"\x12AcknowledgeContext\x12?\n" +
+	"\x0esender_profile\x18\x01 \x01(\v2\x18.protocol.ProfilePayloadR\rsenderProfile\"O\n" +
 	"\n" +
 	"AddMembers\x12A\n" +
 	"\x0emembers_to_add\x18\x01 \x03(\v2\x1b.protocol.IdentityPublicKeyR\fmembersToAdd\"X\n" +
@@ -531,35 +606,39 @@ func file_command_proto_rawDescGZIP() []byte {
 	return file_command_proto_rawDescData
 }
 
-var file_command_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_command_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_command_proto_goTypes = []any{
-	(*DiscloseProfile)(nil),   // 0: protocol.DiscloseProfile
-	(*SignedCommand)(nil),     // 1: protocol.SignedCommand
-	(*Command)(nil),           // 2: protocol.Command
-	(*InitiateContext)(nil),   // 3: protocol.InitiateContext
-	(*AddMembers)(nil),        // 4: protocol.AddMembers
-	(*RemoveMembers)(nil),     // 5: protocol.RemoveMembers
-	(*PromoteAdmins)(nil),     // 6: protocol.PromoteAdmins
-	(*ProfilePayload)(nil),    // 7: protocol.ProfilePayload
-	(*IdentityPublicKey)(nil), // 8: protocol.IdentityPublicKey
+	(*DiscloseProfile)(nil),    // 0: protocol.DiscloseProfile
+	(*SignedCommand)(nil),      // 1: protocol.SignedCommand
+	(*Command)(nil),            // 2: protocol.Command
+	(*InitiateContext)(nil),    // 3: protocol.InitiateContext
+	(*AcknowledgeContext)(nil), // 4: protocol.AcknowledgeContext
+	(*AddMembers)(nil),         // 5: protocol.AddMembers
+	(*RemoveMembers)(nil),      // 6: protocol.RemoveMembers
+	(*PromoteAdmins)(nil),      // 7: protocol.PromoteAdmins
+	(*ProfilePayload)(nil),     // 8: protocol.ProfilePayload
+	(*IdentityPublicKey)(nil),  // 9: protocol.IdentityPublicKey
 }
 var file_command_proto_depIdxs = []int32{
-	7,  // 0: protocol.DiscloseProfile.profile:type_name -> protocol.ProfilePayload
-	8,  // 1: protocol.SignedCommand.author_identity:type_name -> protocol.IdentityPublicKey
+	8,  // 0: protocol.DiscloseProfile.profile:type_name -> protocol.ProfilePayload
+	9,  // 1: protocol.SignedCommand.author_identity:type_name -> protocol.IdentityPublicKey
 	3,  // 2: protocol.Command.initiate_context:type_name -> protocol.InitiateContext
 	0,  // 3: protocol.Command.disclose_profile:type_name -> protocol.DiscloseProfile
-	4,  // 4: protocol.Command.add_members:type_name -> protocol.AddMembers
-	5,  // 5: protocol.Command.remove_members:type_name -> protocol.RemoveMembers
-	6,  // 6: protocol.Command.promote_admins:type_name -> protocol.PromoteAdmins
-	8,  // 7: protocol.InitiateContext.initial_members:type_name -> protocol.IdentityPublicKey
-	8,  // 8: protocol.AddMembers.members_to_add:type_name -> protocol.IdentityPublicKey
-	8,  // 9: protocol.RemoveMembers.members_to_remove:type_name -> protocol.IdentityPublicKey
-	8,  // 10: protocol.PromoteAdmins.members_to_promote:type_name -> protocol.IdentityPublicKey
-	11, // [11:11] is the sub-list for method output_type
-	11, // [11:11] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	4,  // 4: protocol.Command.acknowledge_context:type_name -> protocol.AcknowledgeContext
+	5,  // 5: protocol.Command.add_members:type_name -> protocol.AddMembers
+	6,  // 6: protocol.Command.remove_members:type_name -> protocol.RemoveMembers
+	7,  // 7: protocol.Command.promote_admins:type_name -> protocol.PromoteAdmins
+	9,  // 8: protocol.InitiateContext.initial_members:type_name -> protocol.IdentityPublicKey
+	8,  // 9: protocol.InitiateContext.sender_profile:type_name -> protocol.ProfilePayload
+	8,  // 10: protocol.AcknowledgeContext.sender_profile:type_name -> protocol.ProfilePayload
+	9,  // 11: protocol.AddMembers.members_to_add:type_name -> protocol.IdentityPublicKey
+	9,  // 12: protocol.RemoveMembers.members_to_remove:type_name -> protocol.IdentityPublicKey
+	9,  // 13: protocol.PromoteAdmins.members_to_promote:type_name -> protocol.IdentityPublicKey
+	14, // [14:14] is the sub-list for method output_type
+	14, // [14:14] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_command_proto_init() }
@@ -571,6 +650,7 @@ func file_command_proto_init() {
 	file_command_proto_msgTypes[2].OneofWrappers = []any{
 		(*Command_InitiateContext)(nil),
 		(*Command_DiscloseProfile)(nil),
+		(*Command_AcknowledgeContext)(nil),
 		(*Command_AddMembers)(nil),
 		(*Command_RemoveMembers)(nil),
 		(*Command_PromoteAdmins)(nil),
@@ -581,7 +661,7 @@ func file_command_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_command_proto_rawDesc), len(file_command_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

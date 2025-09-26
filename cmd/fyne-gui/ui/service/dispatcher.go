@@ -27,35 +27,50 @@ func NewMessageDispatcher(protoSvc IProtocolService, cs *ContactService, chs *Ch
 	}
 }
 
-// ПОЛНОСТЬЮ ОБНОВЛЕННЫЙ МЕТОД
+// HandleIncomingData определяет тип входящего сообщения и передает его соответствующему обработчику.
 func (d *MessageDispatcher) HandleIncomingData(senderID string, data []byte) {
-	// Попытка №1: SecureEnvelope (конфиденциальные данные чата)
-	envelope, err := d.protocolService.ParseSecureEnvelope(data)
-	if err == nil {
-		d.handleSecureEnvelope(senderID, envelope)
-		return
+	log.Printf("DEBUG [RECEIVER]: Получено сообщение от %s. Длина: %d байт.", senderID, len(data))
+
+	// ИСПРАВЛЕНИЕ: Изменен порядок проверок. Начинаем с самых простых/уникальных.
+
+	// Попытка №1: SignalingMessage (WebRTC сигнализация)
+	if signalingMsg, err := d.protocolService.ParseSignalingMessage(data); err == nil {
+		if signalingMsg.Payload != nil {
+			d.handleSignalingMessage(senderID, signalingMsg)
+			return
+		}
 	}
 
-	// Попытка №2: SignedCommand (управляющие команды)
-	signedCmd, err := d.protocolService.ParseSignedCommand(data)
-	if err == nil {
-		d.handleSignedCommand(senderID, signedCmd)
-		return
+	// Попытка №2: PingEnvelope (неподписанные запросы для обнаружения)
+	if ping, err := d.protocolService.ParsePingEnvelope(data); err == nil {
+		if ping.Payload != nil {
+			d.handlePingEnvelope(senderID, ping)
+			return
+		}
 	}
 
-	// Попытка №3: SignalingMessage (WebRTC сигнализация)
-	signalingMsg, err := d.protocolService.ParseSignalingMessage(data)
-	if err == nil {
-		log.Printf("INFO: [Dispatcher] Получено SignalingMessage от %s", senderID)
-		d.callService.HandleSignalingMessage(senderID, signalingMsg)
-		return
+	// Попытка №3: SignedCommand (управляющие команды)
+	if signedCmd, err := d.protocolService.ParseSignedCommand(data); err == nil {
+		if signedCmd.AuthorIdentity != nil {
+			// Добавляем лог для отладки, чтобы видеть, что мы думаем, что это команда
+			log.Printf("DEBUG [RECEIVER]: Сообщение распознано как SignedCommand.")
+			d.handleSignedCommand(senderID, signedCmd)
+			return
+		}
 	}
 
-	// Если ничего не подошло - логируем ошибку.
+	// Попытка №4: SecureEnvelope (конфиденциальные данные чата, файлов и т.д.)
+	if envelope, err := d.protocolService.ParseSecureEnvelope(data); err == nil {
+		if envelope.PayloadType != "" {
+			d.handleSecureEnvelope(senderID, envelope)
+			return
+		}
+	}
+
 	log.Printf("WARN: [Dispatcher] Не удалось распознать входящее сообщение от %s", senderID)
 }
 
-// НОВЫЙ МЕТОД: Обработка и маршрутизация SignedCommand
+// handleSignedCommand распаковывает и маршрутизирует криптографически подписанные команды.
 func (d *MessageDispatcher) handleSignedCommand(senderID string, signedCmd *protocol.SignedCommand) {
 	innerCmd, err := d.protocolService.ParseCommand(signedCmd.CommandData)
 	if err != nil {
@@ -63,41 +78,50 @@ func (d *MessageDispatcher) handleSignedCommand(senderID string, signedCmd *prot
 		return
 	}
 
-	// Маршрутизируем команду, передавая конкретный payload в сервис
 	switch payload := innerCmd.Payload.(type) {
+	// --- Команды для ContactService ---
+
+	// ИСПРАВЛЕНИЕ: Раскомментируем этот блок
+	case *protocol.Command_DiscloseProfile:
+		log.Printf("INFO: [Dispatcher] Получена команда DiscloseProfile от %s", senderID)
+		d.contactService.HandleDiscloseProfile(senderID, signedCmd, payload.DiscloseProfile)
+
 	case *protocol.Command_InitiateContext:
 		log.Printf("INFO: [Dispatcher] Получена команда InitiateContext от %s", senderID)
-		// ИСПРАВЛЕНО: Передаем конкретный payload `payload.InitiateContext`
 		d.contactService.HandleInitiateContext(senderID, signedCmd, payload.InitiateContext)
 
-	// --- МЕСТО ДЛЯ БУДУЩИХ КОМАНД ---
+	case *protocol.Command_AcknowledgeContext:
+		log.Printf("INFO: [Dispatcher] Получена команда AcknowledgeContext от %s", senderID)
+		d.contactService.HandleAcknowledgeContext(senderID, signedCmd, payload.AcknowledgeContext)
+
+	// --- Команды для будущего GroupService ---
 	case *protocol.Command_AddMembers:
 		log.Printf("INFO: [Dispatcher] Получена команда AddMembers от %s", senderID)
-		// d.groupService.HandleAddMembers(senderID, signedCmd, payload.AddMembers)
 	case *protocol.Command_RemoveMembers:
 		log.Printf("INFO: [Dispatcher] Получена команда RemoveMembers от %s", senderID)
-		// d.groupService.HandleRemoveMembers(senderID, signedCmd, payload.RemoveMembers)
-
-	// TODO: Добавить case для DiscloseProfile, когда мы добавим его в .proto
-	// case *protocol.Command_DiscloseProfile:
-	// 	 log.Printf("INFO: [Dispatcher] Получена команда DiscloseProfile от %s", senderID)
-	// 	 d.contactService.HandleDiscloseProfile(senderID, signedCmd, payload.DiscloseProfile)
 
 	default:
-		log.Printf("WARN: [Dispatcher] Получена SignedCommand с неизвестным типом payload от %s", senderID)
+		log.Printf("WARN: [Dispatcher] Получена SignedCommand с неизвестным типом payload от %s, %s", senderID, innerCmd.Payload)
 	}
 }
 
-// Метод handleSecureEnvelope и его помощники остаются без изменений.
-// ... (handleSecureEnvelope, handleChatContent, handleFileControl) ...
-// Путь: cmd/fyne-gui/services/dispatcher.go
+// handlePingEnvelope обрабатывает простые "пинговые" сообщения.
+func (d *MessageDispatcher) handlePingEnvelope(senderID string, ping *protocol.PingEnvelope) {
+	switch payload := ping.Payload.(type) {
+	case *protocol.PingEnvelope_ProfileRequest:
+		log.Printf("INFO: [Dispatcher] Получен ProfileRequest от %s", senderID)
+		// Передаем запрос в ContactService, чтобы он мог на него ответить
+		d.contactService.HandlePingRequest(senderID, payload.ProfileRequest)
+	default:
+		log.Printf("WARN: [Dispatcher] Получен PingEnvelope с неизвестным типом payload от %s", senderID)
+	}
+}
+
+// handleSecureEnvelope расшифровывает (пока заглушка) и маршрутизирует конфиденциальные данные.
 func (d *MessageDispatcher) handleSecureEnvelope(senderID string, envelope *protocol.SecureEnvelope) {
 	// !!! ЗАГЛУШКА ДЛЯ РАСШИФРОВКИ !!!
-	// В будущем здесь будет вызов cryptoService.Decrypt(envelope.Ciphertext)
-	// А пока считаем, что ciphertext - это и есть plaintext.
 	plaintext := envelope.Ciphertext
 
-	// Маршрутизируем в зависимости от типа полезной нагрузки
 	switch envelope.PayloadType {
 	case "protocol.ChatContent":
 		content, err := d.protocolService.ParseChatContent(plaintext)
@@ -120,37 +144,42 @@ func (d *MessageDispatcher) handleSecureEnvelope(senderID string, envelope *prot
 	}
 }
 
+// handleChatContent маршрутизирует сообщения, относящиеся к содержимому чата.
 func (d *MessageDispatcher) handleChatContent(senderID string, content *protocol.ChatContent) {
 	switch payload := content.Payload.(type) {
 	case *protocol.ChatContent_Text:
 		d.chatService.ProcessTextMessage(senderID, payload.Text)
-
 	case *protocol.ChatContent_File:
-		log.Printf("INFO: [Dispatcher] Получен анонс файла (FileMetadata) от %s", senderID)
 		card, err := d.fileService.HandleFileAnnouncement(senderID, payload.File)
 		if err == nil && card != nil {
 			d.chatService.ProcessWidgetMessage(card)
 		}
-
-	case *protocol.ChatContent_Receipts:
-		// TODO: Обработка статусов прочтения
-	case *protocol.ChatContent_Edit:
-		// TODO: Обработка редактирования
-	case *protocol.ChatContent_Delete:
-		// TODO: Обработка удаления
+		// ... другие типы содержимого чата ...
 	}
 }
 
+// handleFileControl маршрутизирует команды для управления передачей файлов.
 func (d *MessageDispatcher) handleFileControl(senderID string, content *protocol.FileControl) {
 	switch payload := content.Payload.(type) {
 	case *protocol.FileControl_Request:
-		log.Printf("INFO: [Dispatcher] Получен запрос на скачивание файла от %s", senderID)
 		d.fileService.HandleDownloadRequest(payload.Request, senderID)
+		// ... другие команды управления файлами ...
+	}
+}
 
-	case *protocol.FileControl_Status:
-		// TODO: Обработка статусов (файл недоступен и т.д.)
+func (d *MessageDispatcher) handleSignalingMessage(senderID string, msg *protocol.SignalingMessage) {
+	log.Printf("INFO: [Dispatcher] Получено SignalingMessage (CallID: %s)", msg.CallId)
 
-	case *protocol.FileControl_SeederUpdate:
-		// TODO: Обработка появления нового сида
+	switch payload := msg.Payload.(type) {
+	case *protocol.SignalingMessage_Offer:
+		d.callService.HandleIncomingOffer(senderID, msg.CallId, payload.Offer)
+	case *protocol.SignalingMessage_Answer:
+		d.callService.HandleIncomingAnswer(senderID, msg.CallId, payload.Answer)
+	case *protocol.SignalingMessage_Candidate:
+		d.callService.HandleIncomingICECandidate(senderID, msg.CallId, payload.Candidate)
+	case *protocol.SignalingMessage_Hangup:
+		d.callService.HandleIncomingHangup(senderID, msg.CallId, payload.Hangup)
+	default:
+		log.Printf("WARN: [Dispatcher] Получено SignalingMessage с неизвестным типом payload от %s", senderID)
 	}
 }

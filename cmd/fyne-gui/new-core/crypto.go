@@ -54,11 +54,15 @@ func (cm *cryptoModule) GenerateIdentityKeyPair() ([]byte, []byte, error) {
 
 // Verify проверяет, что подпись является валидной для данного сообщения и публичного ключа.
 func (cm *cryptoModule) Verify(publicKeyBytes []byte, message []byte, signature []byte) (bool, error) {
-	pubKey, err := crypto.UnmarshalEd25519PublicKey(publicKeyBytes)
+	// 1. Используем ОБЩИЙ десериализатор, который понимает формат libp2p.
+	pubKey, err := crypto.UnmarshalPublicKey(publicKeyBytes)
 	if err != nil {
-		return false, fmt.Errorf("не удалось распаковать публичный ключ: %w", err)
+		// Эта ошибка будет более информативной, если что-то не так с форматом.
+		return false, fmt.Errorf("не удалось распаковать публичный ключ libp2p: %w", err)
 	}
 
+	// 2. Вызываем метод Verify() у полученного интерфейса.
+	// Он сам разберется, какой алгоритм подписи использовать (Ed25519, RSA и т.д.).
 	return pubKey.Verify(message, signature)
 }
 

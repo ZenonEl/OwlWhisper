@@ -19,7 +19,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
-	"google.golang.org/protobuf/proto"
 	opus "gopkg.in/hraban/opus.v2"
 )
 
@@ -55,40 +54,40 @@ type IncomingCallData struct {
 	Offer    *protocol.CallOffer
 }
 
+// CallService управляет всей логикой WebRTC звонков.
 type CallService struct {
+	// --- Зависимости ---
 	core            newcore.ICoreController
-	contactService  *ContactService
 	protocolService IProtocolService
 
-	webrtcAPI    *webrtc.API
-	webrtcConfig webrtc.Configuration
-
-	pcMutex             sync.RWMutex
-	peerConnection      *webrtc.PeerConnection
-	currentTargetPeerID string
-	currentCallID       string
-
-	stateMutex   sync.RWMutex
-	currentState CallState
-	incomingCall *IncomingCallData
-
-	malgoCtx    *malgo.AllocatedContext
-	audioDevice *malgo.Device
-	localTrack  *webrtc.TrackLocalStaticSample
-	opusEncoder *opus.Encoder
-	opusDecoder *opus.Decoder
-
+	// --- WebRTC и аудио ---
+	webrtcAPI            *webrtc.API
+	webrtcConfig         webrtc.Configuration
+	malgoCtx             *malgo.AllocatedContext
+	opusEncoder          *opus.Encoder
+	opusDecoder          *opus.Decoder
+	localTrack           *webrtc.TrackLocalStaticSample
+	audioDevice          *malgo.Device
 	jitterBuffer         *JitterBuffer
 	captureBuffer        *bytes.Buffer
 	playbackLinearBuffer *bytes.Buffer
 	doneChan             chan struct{}
 
+	// --- Состояние звонка ---
+	pcMutex             sync.RWMutex
+	peerConnection      *webrtc.PeerConnection
+	currentTargetPeerID string
+	currentCallID       string
+	stateMutex          sync.RWMutex
+	currentState        CallState
+	incomingCall        *IncomingCallData
+	pendingCandidates   map[string][]webrtc.ICECandidateInit
+
+	// --- UI Callbacks ---
 	onIncomingCall func(senderID, callID string)
 
-	underflowCounter atomic.Uint64
-	isPlaybackReady  atomic.Bool
-
-	pendingCandidates map[string][]webrtc.ICECandidateInit
+	// --- Статистика/флаги ---
+	isPlaybackReady atomic.Bool
 }
 
 func NewCallService(core newcore.ICoreController, cs *ContactService, ps IProtocolService, onIncomingCall func(string, string)) (*CallService, error) {
@@ -126,27 +125,30 @@ func NewCallService(core newcore.ICoreController, cs *ContactService, ps IProtoc
 
 	return &CallService{
 		core:                 core,
-		contactService:       cs,
 		protocolService:      ps,
 		webrtcAPI:            api,
 		webrtcConfig:         config,
-		pendingCandidates:    make(map[string][]webrtc.ICECandidateInit),
-		currentState:         CallStateIdle,
-		onIncomingCall:       onIncomingCall,
 		malgoCtx:             malgoCtx,
 		opusDecoder:          decoder,
 		opusEncoder:          encoder,
+		currentState:         CallStateIdle,
+		pendingCandidates:    make(map[string][]webrtc.ICECandidateInit),
+		onIncomingCall:       onIncomingCall,
 		jitterBuffer:         NewJitterBuffer(pcmSizeBytes, jitterBufferCapacityFrames),
 		playbackLinearBuffer: new(bytes.Buffer),
 		captureBuffer:        new(bytes.Buffer),
 	}, nil
 }
 
+// ================================================================= //
+//                      ПУБЛИЧНЫЕ МЕТОДЫ (API для UI)                  //
+// ================================================================= //
+
 func (cs *CallService) InitiateCall(recipientID string) error {
 	cs.stateMutex.Lock()
 	if cs.currentState != CallStateIdle {
 		cs.stateMutex.Unlock()
-		return fmt.Errorf("нельзя начать новый звонок, текущий статус: %s", cs.currentState)
+		return fmt.Errorf("статус не Idle: %s", cs.currentState)
 	}
 	cs.stateMutex.Unlock()
 
@@ -157,51 +159,27 @@ func (cs *CallService) InitiateCall(recipientID string) error {
 		return err
 	}
 
-	pc.OnICECandidate(func(c *webrtc.ICECandidate) {
-		if c == nil {
-			return
-		}
-		cs.sendICECandidate(recipientID, cs.currentCallID, c)
-	})
+	pc.OnICECandidate(func(c *webrtc.ICECandidate) { cs.sendICECandidate(recipientID, cs.currentCallID, c) })
 
-	// 1. Создаем локальный аудио-трек, в который будем писать PCM-данные
+	// ... (создание и добавление треков, OnTrack, startAudioDevice) ...
 	audioTrack, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 1}, "audio", "pion")
 	if err != nil {
 		pc.Close()
 		return err
 	}
 	cs.localTrack = audioTrack
-
-	// 2. Добавляем трек в PeerConnection ОДИН РАЗ
 	if _, err := pc.AddTrack(audioTrack); err != nil {
 		pc.Close()
 		return err
 	}
-
-	// 3. Устанавливаем обработчик для входящего звука
-	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-		log.Printf("INFO: [CallService] (Инициатор) Получен удаленный трек! Codec: %s", track.Codec().MimeType)
-		go cs.playRemoteTrack(track)
-	})
-
-	// 4. Запускаем аудио-устройство ДО создания Offer
+	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) { go cs.playRemoteTrack(track) })
 	if err := cs.startAudioDevice(); err != nil {
 		pc.Close()
 		return err
 	}
-
-	if _, err := pc.CreateDataChannel("owl-whisper-data", nil); err != nil {
-		cs.HangupCall()
-		return fmt.Errorf("не удалось создать Data Channel: %w", err)
-	}
-
-	//iceGatheringComplete := webrtc.GatheringCompletePromise(pc)
 	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
-		log.Printf("INFO: [CallService] (Инициатор) Состояние PeerConnection: %s", state.String())
 		if state == webrtc.PeerConnectionStateConnected {
-			cs.stateMutex.Lock()
 			cs.currentState = CallStateConnected
-			cs.stateMutex.Unlock()
 		}
 	})
 
@@ -210,14 +188,10 @@ func (cs *CallService) InitiateCall(recipientID string) error {
 		cs.HangupCall()
 		return err
 	}
-
 	if err = pc.SetLocalDescription(offer); err != nil {
 		cs.HangupCall()
 		return err
 	}
-
-	//<-iceGatheringComplete
-	//finalOffer := pc.LocalDescription()
 
 	cs.pcMutex.Lock()
 	cs.peerConnection = pc
@@ -229,19 +203,9 @@ func (cs *CallService) InitiateCall(recipientID string) error {
 	cs.currentState = CallStateDialing
 	cs.stateMutex.Unlock()
 
-	log.Printf("INFO: [CallService] Сбор ICE завершен. Отправляем готовый Offer...")
-	offerMsg := &protocol.CallOffer{Sdp: offer.SDP}
-	signalMsg := &protocol.SignalingMessage{
-		CallId:  cs.currentCallID,
-		Payload: &protocol.SignalingMessage_Offer{Offer: offerMsg},
-	}
-	envelope := &protocol.Envelope{
-		MessageId:     uuid.New().String(),
-		SenderId:      cs.core.GetMyPeerID(),
-		TimestampUnix: time.Now().Unix(),
-		Payload:       &protocol.Envelope_SignalingMessage{SignalingMessage: signalMsg},
-	}
-	data, err := proto.Marshal(envelope)
+	// --- ИЗМЕНЕНА ЛОГИКА ОТПРАВКИ ---
+	log.Printf("INFO: [CallService] Отправляем Offer (CallID: %s)...", cs.currentCallID)
+	data, err := cs.protocolService.CreateSignaling_Offer(cs.currentCallID, offer.SDP)
 	if err != nil {
 		cs.HangupCall()
 		return err
@@ -254,11 +218,9 @@ func (cs *CallService) AcceptCall() error {
 	cs.stateMutex.Lock()
 	if cs.currentState != CallStateIncoming || cs.incomingCall == nil {
 		cs.stateMutex.Unlock()
-		return fmt.Errorf("нет входящего звонка для принятия")
+		return fmt.Errorf("нет входящего звонка")
 	}
-	senderID := cs.incomingCall.SenderID
-	callID := cs.incomingCall.CallID
-	offer := cs.incomingCall.Offer
+	senderID, callID, offer := cs.incomingCall.SenderID, cs.incomingCall.CallID, cs.incomingCall.Offer
 	cs.incomingCall = nil
 	cs.stateMutex.Unlock()
 
@@ -266,21 +228,10 @@ func (cs *CallService) AcceptCall() error {
 	if err != nil {
 		return err
 	}
+	pc.OnICECandidate(func(c *webrtc.ICECandidate) { cs.sendICECandidate(senderID, callID, c) })
 
-	pc.OnICECandidate(func(c *webrtc.ICECandidate) {
-		if c == nil {
-			return
-		}
-		cs.sendICECandidate(senderID, callID, c)
-	})
-
-	// 1. Устанавливаем обработчик для входящего звука
-	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-		log.Printf("INFO: [CallService] (Ответчик) Получен удаленный трек! Codec: %s", track.Codec().MimeType)
-		go cs.playRemoteTrack(track)
-	})
-
-	// 2. Настраиваем наш исходящий трек для отправки PCM
+	// ... (OnTrack, создание и добавление треков, startAudioDevice) ...
+	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) { go cs.playRemoteTrack(track) })
 	audioTrack, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 1}, "audio", "pion")
 	if err != nil {
 		pc.Close()
@@ -291,62 +242,38 @@ func (cs *CallService) AcceptCall() error {
 		pc.Close()
 		return err
 	}
-
-	// 3. Запускаем аудио-устройство ДО установки Remote Description
 	if err := cs.startAudioDevice(); err != nil {
 		pc.Close()
 		return err
 	}
 
-	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
-		log.Printf("INFO: [CallService] (Ответчик) Состояние PeerConnection: %s", state.String())
-	})
-
-	if err = pc.SetRemoteDescription(webrtc.SessionDescription{
-		Type: webrtc.SDPTypeOffer,
-		SDP:  offer.Sdp,
-	}); err != nil {
+	if err = pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: offer.Sdp}); err != nil {
 		cs.HangupCall()
 		return err
 	}
 
 	cs.pcMutex.Lock()
 	cs.peerConnection = pc
-	cs.pcMutex.Unlock()
-
 	cs.applyPendingCandidates_unsafe(senderID)
+	cs.pcMutex.Unlock()
 
 	answer, err := pc.CreateAnswer(nil)
 	if err != nil {
 		cs.HangupCall()
 		return err
 	}
-
-	//gatherComplete := webrtc.GatheringCompletePromise(pc)
 	if err = pc.SetLocalDescription(answer); err != nil {
 		cs.HangupCall()
 		return err
 	}
-	//<-gatherComplete
-
-	//finalAnswer := pc.LocalDescription()
 
 	cs.stateMutex.Lock()
 	cs.currentState = CallStateConnected
 	cs.stateMutex.Unlock()
 
-	answerMsg := &protocol.CallAnswer{Sdp: answer.SDP}
-	signalMsg := &protocol.SignalingMessage{
-		CallId:  callID,
-		Payload: &protocol.SignalingMessage_Answer{Answer: answerMsg},
-	}
-	envelope := &protocol.Envelope{
-		MessageId:     uuid.New().String(),
-		SenderId:      cs.core.GetMyPeerID(),
-		TimestampUnix: time.Now().Unix(),
-		Payload:       &protocol.Envelope_SignalingMessage{SignalingMessage: signalMsg},
-	}
-	data, err := proto.Marshal(envelope)
+	// --- ИЗМЕНЕНА ЛОГИКА ОТПРАВКИ ---
+	log.Printf("INFO: [CallService] Отправляем Answer (CallID: %s)...", callID)
+	data, err := cs.protocolService.CreateSignaling_Answer(callID, answer.SDP)
 	if err != nil {
 		cs.HangupCall()
 		return err
@@ -364,6 +291,8 @@ func (cs *CallService) HangupCall() error {
 	cs.pcMutex.Unlock()
 
 	cs.stopAudioDevice()
+
+	// TODO: Отправить Signaling_Hangup собеседнику
 
 	cs.stateMutex.Lock()
 	cs.currentState = CallStateIdle
@@ -436,7 +365,7 @@ func (cs *CallService) startAudioDevice() error {
 
 			n, _ := cs.playbackLinearBuffer.Read(output)
 			if n < len(output) {
-				cs.underflowCounter.Add(1)
+				//cs.underflowCounter.Add(1)
 				for i := n; i < len(output); i++ {
 					output[i] = 0
 				}
@@ -511,92 +440,89 @@ func (cs *CallService) playRemoteTrack(remoteTrack *webrtc.TrackRemote) {
 	}
 }
 
-func (cs *CallService) HandleSignalingMessage(senderID string, msg *protocol.SignalingMessage) {
-	callID := msg.CallId
-	switch payload := msg.Payload.(type) {
-	case *protocol.SignalingMessage_Offer:
-		if err := cs.HandleIncomingOffer(senderID, callID, payload.Offer); err != nil {
-			log.Printf("ERROR: [CallService] Ошибка обработки Offer: %v", err)
-		}
-	case *protocol.SignalingMessage_Answer:
-		if err := cs.HandleIncomingAnswer(senderID, callID, payload.Answer); err != nil {
-			log.Printf("ERROR: [CallService] Ошибка обработки Answer: %v", err)
-		}
-	case *protocol.SignalingMessage_Candidate:
-		if err := cs.HandleIncomingICECandidate(senderID, callID, payload.Candidate); err != nil {
-			log.Printf("ERROR: [CallService] Ошибка обработки ICE Candidate: %v", err)
-		}
-	}
-}
+// ================================================================= //
+//               ПУБЛИЧНЫЕ МЕТОДЫ (ОБРАБОТЧИКИ от DISPATCHER)         //
+// ================================================================= //
 
-func (cs *CallService) HandleIncomingOffer(senderID string, callID string, offer *protocol.CallOffer) error {
+func (cs *CallService) HandleIncomingOffer(senderID string, callID string, offer *protocol.CallOffer) {
 	cs.stateMutex.Lock()
 	if cs.currentState != CallStateIdle {
 		cs.stateMutex.Unlock()
-		return fmt.Errorf("получен Offer, но состояние не Idle (%s)", cs.currentState)
+		log.Printf("WARN: [CallService] Получен Offer, но состояние не Idle (%s)", cs.currentState)
+		// TODO: Отправить Hangup с причиной "занято"
+		return
 	}
 	log.Printf("INFO: [CallService] Получен входящий звонок. Сохраняем Offer и уведомляем UI.")
 	cs.incomingCall = &IncomingCallData{SenderID: senderID, CallID: callID, Offer: offer}
 	cs.currentState = CallStateIncoming
 	cs.stateMutex.Unlock()
+
 	if cs.onIncomingCall != nil {
 		go cs.onIncomingCall(senderID, callID)
 	}
-	return nil
 }
 
-func (cs *CallService) HandleIncomingAnswer(senderID string, callID string, answer *protocol.CallAnswer) error {
+func (cs *CallService) HandleIncomingAnswer(senderID string, callID string, answer *protocol.CallAnswer) {
 	cs.pcMutex.RLock()
 	pc := cs.peerConnection
 	targetPeer := cs.currentTargetPeerID
 	cs.pcMutex.RUnlock()
+
 	if pc == nil || targetPeer != senderID {
-		return fmt.Errorf("получен Answer, но нет активного звонка с этим пиром")
+		log.Printf("WARN: [CallService] Получен Answer, но нет активного звонка с этим пиром")
+		return
 	}
+
 	err := pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: answer.Sdp})
 	if err != nil {
-		return err
+		log.Printf("ERROR: [CallService] Ошибка установки RemoteDescription (Answer): %v", err)
 	}
+
 	cs.pcMutex.Lock()
 	cs.applyPendingCandidates_unsafe(senderID)
 	cs.pcMutex.Unlock()
-	return nil
 }
 
-func (cs *CallService) HandleIncomingICECandidate(senderID string, callID string, candidate *protocol.ICECandidate) error {
+func (cs *CallService) HandleIncomingICECandidate(senderID string, callID string, candidate *protocol.ICECandidate) {
 	cs.pcMutex.Lock()
 	defer cs.pcMutex.Unlock()
+
 	candidateInit := webrtc.ICECandidateInit{Candidate: candidate.Candidate}
 	if cs.peerConnection != nil && cs.peerConnection.RemoteDescription() != nil {
-		return cs.peerConnection.AddICECandidate(candidateInit)
+		if err := cs.peerConnection.AddICECandidate(candidateInit); err != nil {
+			log.Printf("WARN: [CallService] Ошибка добавления ICE-кандидата: %v", err)
+		}
+		return
 	}
+
 	log.Printf("INFO: [CallService] Получен 'ранний' ICE-кандидат от %s. Буферизируем.", senderID[:8])
 	cs.pendingCandidates[senderID] = append(cs.pendingCandidates[senderID], candidateInit)
-	return nil
 }
+
+func (cs *CallService) HandleIncomingHangup(senderID string, callID string, hangup *protocol.CallHangup) {
+	log.Printf("INFO: [CallService] Получено сообщение о завершении звонка от %s. Причина: %s", senderID, hangup.Reason.String())
+	// Вызываем локальный Hangup, чтобы очистить все ресурсы
+	cs.HangupCall()
+}
+
+// ================================================================= //
+//                    ВНУТРЕННИЕ МЕТОДЫ (ЛОГИКА)                     //
+// ================================================================= //
 
 func (cs *CallService) sendICECandidate(recipientID string, callID string, c *webrtc.ICECandidate) {
 	if c == nil {
 		return
 	}
-	candidateMsg := &protocol.ICECandidate{Candidate: c.ToJSON().Candidate}
-	signalMsg := &protocol.SignalingMessage{
-		CallId:  callID,
-		Payload: &protocol.SignalingMessage_Candidate{Candidate: candidateMsg},
-	}
-	envelope := &protocol.Envelope{
-		MessageId:     uuid.New().String(),
-		SenderId:      cs.core.GetMyPeerID(),
-		TimestampUnix: time.Now().Unix(),
-		Payload:       &protocol.Envelope_SignalingMessage{SignalingMessage: signalMsg},
-	}
-	data, err := proto.Marshal(envelope)
+
+	// --- ИЗМЕНЕНА ЛОГИКА ОТПРАВКИ ---
+	data, err := cs.protocolService.CreateSignaling_Candidate(callID, c.ToJSON().Candidate)
 	if err != nil {
 		log.Printf("ERROR: [CallService] Ошибка Marshal при создании ICE Candidate: %v", err)
 		return
 	}
+
 	if err := cs.core.SendDataToPeer(recipientID, data); err != nil {
-		log.Printf("ERROR: [CallService] Не удалось отправить ICE Candidate: %v", err)
+		log.Printf("WARN: [CallService] Не удалось отправить ICE Candidate: %v", err)
 	}
 }
 
