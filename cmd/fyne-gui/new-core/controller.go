@@ -298,7 +298,7 @@ func (c *CoreController) handleGenericStream(stream network.Stream) {
 		log.Printf("ERROR: Не удалось прочитать данные из потока от %s: %v", senderID.ShortString(), err)
 		return
 	}
-
+	log.Printf("DEBUG [CORE]: Получены сырые данные по стриму от %s. Длина: %d байт.", senderID.ShortString(), len(data))
 	c.pushEvent("NewMessage", NewMessagePayload{
 		SenderID: senderID.String(),
 		Data:     data,

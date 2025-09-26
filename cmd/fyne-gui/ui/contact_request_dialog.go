@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	protocol "OwlWhisper/cmd/fyne-gui/new-core/protocol"
-	"OwlWhisper/cmd/fyne-gui/services"
+	services "OwlWhisper/cmd/fyne-gui/ui/service"
 
 	"fyne.io/fyne/v2/dialog"
 )

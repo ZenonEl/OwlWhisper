@@ -46,6 +46,7 @@ message Command {
     // === Команды, общие для всех контекстов ===
     InitiateContext initiate_context = 10; // Начать новый чат (1:1 или группу)
     DiscloseProfile disclose_profile = 11; // НОВАЯ КОМАНДА: Раскрыть свой профиль в ответ на пинг
+    AcknowledgeContext acknowledge_context = 12;
 
     // === Команды, специфичные для групп ===
     AddMembers add_members = 20;
@@ -63,6 +64,14 @@ message InitiateContext {
   // Политика чата (например, "только админы могут добавлять участников").
   // Можно определить позже.
   bytes policy = 2;
+  ProfilePayload sender_profile = 3;
+}
+
+// AcknowledgeContext - это ответная команда для подтверждения участия
+// в новом контексте (чате).
+message AcknowledgeContext {
+  // Профиль отвечающего, чтобы инициатор мог его сохранить.
+  ProfilePayload sender_profile = 1;
 }
 
 // AddMembers добавляет новых участников в существующий контекст (группу).
