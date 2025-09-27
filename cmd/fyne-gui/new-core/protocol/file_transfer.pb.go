@@ -75,7 +75,7 @@ func (x FileTransferStatus_Status) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use FileTransferStatus_Status.Descriptor instead.
 func (FileTransferStatus_Status) EnumDescriptor() ([]byte, []int) {
-	return file_file_transfer_proto_rawDescGZIP(), []int{3, 0}
+	return file_file_transfer_proto_rawDescGZIP(), []int{4, 0}
 }
 
 // FileControl - это обертка для всех "управляющих" сообщений,
@@ -88,6 +88,7 @@ type FileControl struct {
 	//	*FileControl_Request
 	//	*FileControl_Status
 	//	*FileControl_SeederUpdate
+	//	*FileControl_Ack
 	Payload       isFileControl_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -157,6 +158,15 @@ func (x *FileControl) GetSeederUpdate() *FileSeederUpdate {
 	return nil
 }
 
+func (x *FileControl) GetAck() *FileChunkAck {
+	if x != nil {
+		if x, ok := x.Payload.(*FileControl_Ack); ok {
+			return x.Ack
+		}
+	}
+	return nil
+}
+
 type isFileControl_Payload interface {
 	isFileControl_Payload()
 }
@@ -173,11 +183,17 @@ type FileControl_SeederUpdate struct {
 	SeederUpdate *FileSeederUpdate `protobuf:"bytes,3,opt,name=seeder_update,json=seederUpdate,proto3,oneof"` // Уведомление о появлении нового "сида"
 }
 
+type FileControl_Ack struct {
+	Ack *FileChunkAck `protobuf:"bytes,4,opt,name=ack,proto3,oneof"`
+}
+
 func (*FileControl_Request) isFileControl_Payload() {}
 
 func (*FileControl_Status) isFileControl_Payload() {}
 
 func (*FileControl_SeederUpdate) isFileControl_Payload() {}
+
+func (*FileControl_Ack) isFileControl_Payload() {}
 
 // FileDownloadRequest - запрос на начало скачивания.
 type FileDownloadRequest struct {
@@ -232,6 +248,58 @@ func (x *FileDownloadRequest) GetStartOffset() int64 {
 	return 0
 }
 
+type FileChunkAck struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	TransferId         string                 `protobuf:"bytes,1,opt,name=transfer_id,json=transferId,proto3" json:"transfer_id,omitempty"`                          // ID передачи, к которой относится подтверждение
+	AcknowledgedOffset int64                  `protobuf:"varint,2,opt,name=acknowledged_offset,json=acknowledgedOffset,proto3" json:"acknowledged_offset,omitempty"` // Смещение в байтах, до которого все получено
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *FileChunkAck) Reset() {
+	*x = FileChunkAck{}
+	mi := &file_file_transfer_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FileChunkAck) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FileChunkAck) ProtoMessage() {}
+
+func (x *FileChunkAck) ProtoReflect() protoreflect.Message {
+	mi := &file_file_transfer_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FileChunkAck.ProtoReflect.Descriptor instead.
+func (*FileChunkAck) Descriptor() ([]byte, []int) {
+	return file_file_transfer_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *FileChunkAck) GetTransferId() string {
+	if x != nil {
+		return x.TransferId
+	}
+	return ""
+}
+
+func (x *FileChunkAck) GetAcknowledgedOffset() int64 {
+	if x != nil {
+		return x.AcknowledgedOffset
+	}
+	return 0
+}
+
 // FileData - "Кусок" файла. Это сообщение передается по
 // отдельному, высокопроизводительному файловому стриму.
 type FileData struct {
@@ -246,7 +314,7 @@ type FileData struct {
 
 func (x *FileData) Reset() {
 	*x = FileData{}
-	mi := &file_file_transfer_proto_msgTypes[2]
+	mi := &file_file_transfer_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -258,7 +326,7 @@ func (x *FileData) String() string {
 func (*FileData) ProtoMessage() {}
 
 func (x *FileData) ProtoReflect() protoreflect.Message {
-	mi := &file_file_transfer_proto_msgTypes[2]
+	mi := &file_file_transfer_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -271,7 +339,7 @@ func (x *FileData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileData.ProtoReflect.Descriptor instead.
 func (*FileData) Descriptor() ([]byte, []int) {
-	return file_file_transfer_proto_rawDescGZIP(), []int{2}
+	return file_file_transfer_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *FileData) GetTransferId() string {
@@ -314,7 +382,7 @@ type FileTransferStatus struct {
 
 func (x *FileTransferStatus) Reset() {
 	*x = FileTransferStatus{}
-	mi := &file_file_transfer_proto_msgTypes[3]
+	mi := &file_file_transfer_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -326,7 +394,7 @@ func (x *FileTransferStatus) String() string {
 func (*FileTransferStatus) ProtoMessage() {}
 
 func (x *FileTransferStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_file_transfer_proto_msgTypes[3]
+	mi := &file_file_transfer_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -339,7 +407,7 @@ func (x *FileTransferStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileTransferStatus.ProtoReflect.Descriptor instead.
 func (*FileTransferStatus) Descriptor() ([]byte, []int) {
-	return file_file_transfer_proto_rawDescGZIP(), []int{3}
+	return file_file_transfer_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *FileTransferStatus) GetTransferId() string {
@@ -374,7 +442,7 @@ type FileSeederUpdate struct {
 
 func (x *FileSeederUpdate) Reset() {
 	*x = FileSeederUpdate{}
-	mi := &file_file_transfer_proto_msgTypes[4]
+	mi := &file_file_transfer_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -386,7 +454,7 @@ func (x *FileSeederUpdate) String() string {
 func (*FileSeederUpdate) ProtoMessage() {}
 
 func (x *FileSeederUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_file_transfer_proto_msgTypes[4]
+	mi := &file_file_transfer_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -399,7 +467,7 @@ func (x *FileSeederUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileSeederUpdate.ProtoReflect.Descriptor instead.
 func (*FileSeederUpdate) Descriptor() ([]byte, []int) {
-	return file_file_transfer_proto_rawDescGZIP(), []int{4}
+	return file_file_transfer_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *FileSeederUpdate) GetTransferId() string {
@@ -413,16 +481,21 @@ var File_file_transfer_proto protoreflect.FileDescriptor
 
 const file_file_transfer_proto_rawDesc = "" +
 	"\n" +
-	"\x13file_transfer.proto\x12\bprotocol\"\xce\x01\n" +
+	"\x13file_transfer.proto\x12\bprotocol\"\xfa\x01\n" +
 	"\vFileControl\x129\n" +
 	"\arequest\x18\x01 \x01(\v2\x1d.protocol.FileDownloadRequestH\x00R\arequest\x126\n" +
 	"\x06status\x18\x02 \x01(\v2\x1c.protocol.FileTransferStatusH\x00R\x06status\x12A\n" +
-	"\rseeder_update\x18\x03 \x01(\v2\x1a.protocol.FileSeederUpdateH\x00R\fseederUpdateB\t\n" +
+	"\rseeder_update\x18\x03 \x01(\v2\x1a.protocol.FileSeederUpdateH\x00R\fseederUpdate\x12*\n" +
+	"\x03ack\x18\x04 \x01(\v2\x16.protocol.FileChunkAckH\x00R\x03ackB\t\n" +
 	"\apayload\"Y\n" +
 	"\x13FileDownloadRequest\x12\x1f\n" +
 	"\vtransfer_id\x18\x01 \x01(\tR\n" +
 	"transferId\x12!\n" +
-	"\fstart_offset\x18\x02 \x01(\x03R\vstartOffset\"\x86\x01\n" +
+	"\fstart_offset\x18\x02 \x01(\x03R\vstartOffset\"`\n" +
+	"\fFileChunkAck\x12\x1f\n" +
+	"\vtransfer_id\x18\x01 \x01(\tR\n" +
+	"transferId\x12/\n" +
+	"\x13acknowledged_offset\x18\x02 \x01(\x03R\x12acknowledgedOffset\"\x86\x01\n" +
 	"\bFileData\x12\x1f\n" +
 	"\vtransfer_id\x18\x01 \x01(\tR\n" +
 	"transferId\x12\x1d\n" +
@@ -458,25 +531,27 @@ func file_file_transfer_proto_rawDescGZIP() []byte {
 }
 
 var file_file_transfer_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_file_transfer_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_file_transfer_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_file_transfer_proto_goTypes = []any{
 	(FileTransferStatus_Status)(0), // 0: protocol.FileTransferStatus.Status
 	(*FileControl)(nil),            // 1: protocol.FileControl
 	(*FileDownloadRequest)(nil),    // 2: protocol.FileDownloadRequest
-	(*FileData)(nil),               // 3: protocol.FileData
-	(*FileTransferStatus)(nil),     // 4: protocol.FileTransferStatus
-	(*FileSeederUpdate)(nil),       // 5: protocol.FileSeederUpdate
+	(*FileChunkAck)(nil),           // 3: protocol.FileChunkAck
+	(*FileData)(nil),               // 4: protocol.FileData
+	(*FileTransferStatus)(nil),     // 5: protocol.FileTransferStatus
+	(*FileSeederUpdate)(nil),       // 6: protocol.FileSeederUpdate
 }
 var file_file_transfer_proto_depIdxs = []int32{
 	2, // 0: protocol.FileControl.request:type_name -> protocol.FileDownloadRequest
-	4, // 1: protocol.FileControl.status:type_name -> protocol.FileTransferStatus
-	5, // 2: protocol.FileControl.seeder_update:type_name -> protocol.FileSeederUpdate
-	0, // 3: protocol.FileTransferStatus.status:type_name -> protocol.FileTransferStatus.Status
-	4, // [4:4] is the sub-list for method output_type
-	4, // [4:4] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	5, // 1: protocol.FileControl.status:type_name -> protocol.FileTransferStatus
+	6, // 2: protocol.FileControl.seeder_update:type_name -> protocol.FileSeederUpdate
+	3, // 3: protocol.FileControl.ack:type_name -> protocol.FileChunkAck
+	0, // 4: protocol.FileTransferStatus.status:type_name -> protocol.FileTransferStatus.Status
+	5, // [5:5] is the sub-list for method output_type
+	5, // [5:5] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_file_transfer_proto_init() }
@@ -488,6 +563,7 @@ func file_file_transfer_proto_init() {
 		(*FileControl_Request)(nil),
 		(*FileControl_Status)(nil),
 		(*FileControl_SeederUpdate)(nil),
+		(*FileControl_Ack)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -495,7 +571,7 @@ func file_file_transfer_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_file_transfer_proto_rawDesc), len(file_file_transfer_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   5,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -20,6 +20,7 @@ message FileControl {
         FileDownloadRequest request = 1; // Запрос на начало скачивания
         FileTransferStatus status = 2;   // Сообщение о статусе (ошибка, отмена)
         FileSeederUpdate seeder_update = 3; // Уведомление о появлении нового "сида"
+        FileChunkAck ack = 4;
     }
 }
 
@@ -30,6 +31,10 @@ message FileDownloadRequest {
   int64  start_offset = 2; // С какого байта начать (для докачки)
 }
 
+message FileChunkAck {
+    string transfer_id = 1; // ID передачи, к которой относится подтверждение
+    int64 acknowledged_offset = 2; // Смещение в байтах, до которого все получено
+}
 
 // FileData - "Кусок" файла. Это сообщение передается по
 // отдельному, высокопроизводительному файловому стриму.
