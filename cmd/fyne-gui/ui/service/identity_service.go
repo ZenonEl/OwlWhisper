@@ -17,6 +17,7 @@ type IIdentityService interface {
 	GetMyIdentityPublicKeyProto() *protocol.IdentityPublicKey
 	GetMyProfileContact() *Contact
 	GetMyProfilePayload() *protocol.ProfilePayload
+	GetMyFingerprint() string
 	SetMyNickname(nickname string)
 	UpdateMyPeerID(peerID string)
 }
@@ -24,18 +25,19 @@ type IIdentityService interface {
 // identityService - stateful-реализация, хранящая данные о профиле в памяти.
 type identityService struct {
 	cryptoService ICryptoService // Нужен для получения публичного ключа
+	trustService  ITrustService
 	myProfile     *Contact
 	mu            sync.RWMutex
 }
 
 // NewIdentityService - конструктор для нашего сервиса.
-func NewIdentityService(cryptoService ICryptoService) IIdentityService {
+func NewIdentityService(cryptoService ICryptoService, trustService ITrustService) IIdentityService {
 	return &identityService{
 		cryptoService: cryptoService,
+		trustService:  trustService,
 		myProfile: &Contact{
-			// Изначально PeerID неизвестен, он придет из Core
 			PeerID:   "загрузка...",
-			Nickname: "Избранное",
+			Nickname: "...",
 			IsSelf:   true,
 		},
 	}
@@ -85,6 +87,13 @@ func (s *identityService) GetMyProfilePayload() *protocol.ProfilePayload {
 		Nickname:      s.myProfile.Nickname,
 		Discriminator: s.myProfile.Discriminator,
 	}
+}
+
+func (s *identityService) GetMyFingerprint() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	// Отпечаток генерируется из сериализованного ключа
+	return s.trustService.GenerateFingerprint(s.GetMyPublicKeyBytes())
 }
 
 func (s *identityService) SetMyNickname(nickname string) {

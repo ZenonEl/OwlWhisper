@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	newcore "OwlWhisper/cmd/fyne-gui/new-core"
 	protocol "OwlWhisper/cmd/fyne-gui/new-core/protocol"
 
 	"github.com/gen2brain/malgo"
@@ -57,7 +56,7 @@ type IncomingCallData struct {
 // CallService управляет всей логикой WebRTC звонков.
 type CallService struct {
 	// --- Зависимости ---
-	core            newcore.ICoreController
+	sender          IMessageSender
 	protocolService IProtocolService
 
 	// --- WebRTC и аудио ---
@@ -90,7 +89,7 @@ type CallService struct {
 	isPlaybackReady atomic.Bool
 }
 
-func NewCallService(core newcore.ICoreController, cs *ContactService, ps IProtocolService, onIncomingCall func(string, string)) (*CallService, error) {
+func NewCallService(sender IMessageSender, ps IProtocolService, onIncomingCall func(string, string)) (*CallService, error) {
 	m := &webrtc.MediaEngine{}
 	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
 		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 1, SDPFmtpLine: "minptime=10;useinbandfec=1"},
@@ -124,7 +123,7 @@ func NewCallService(core newcore.ICoreController, cs *ContactService, ps IProtoc
 	}
 
 	return &CallService{
-		core:                 core,
+		sender:               sender,
 		protocolService:      ps,
 		webrtcAPI:            api,
 		webrtcConfig:         config,
@@ -211,7 +210,7 @@ func (cs *CallService) InitiateCall(recipientID string) error {
 		return err
 	}
 
-	return cs.core.SendDataToPeer(recipientID, data)
+	return cs.sender.SendSignaling(recipientID, data)
 }
 
 func (cs *CallService) AcceptCall() error {
@@ -279,7 +278,7 @@ func (cs *CallService) AcceptCall() error {
 		return err
 	}
 
-	return cs.core.SendDataToPeer(senderID, data)
+	return cs.sender.SendSignaling(senderID, data)
 }
 
 func (cs *CallService) HangupCall() error {
@@ -521,7 +520,7 @@ func (cs *CallService) sendICECandidate(recipientID string, callID string, c *we
 		return
 	}
 
-	if err := cs.core.SendDataToPeer(recipientID, data); err != nil {
+	if err := cs.sender.SendSignaling(recipientID, data); err != nil {
 		log.Printf("WARN: [CallService] Не удалось отправить ICE Candidate: %v", err)
 	}
 }

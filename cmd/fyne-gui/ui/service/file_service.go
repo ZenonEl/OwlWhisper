@@ -40,6 +40,7 @@ type TransferState struct {
 type FileService struct {
 	// --- Зависимости ---
 	core            newcore.ICoreController
+	sender          IMessageSender
 	protocolService IProtocolService
 	identityService IIdentityService
 	cardGenerator   FileCardGenerator // Зависимость от интерфейса, а не от реализации
@@ -50,9 +51,10 @@ type FileService struct {
 }
 
 // NewFileService - конструктор для FileService.
-func NewFileService(core newcore.ICoreController, protoSvc IProtocolService, idSvc IIdentityService, cardGen FileCardGenerator) *FileService {
+func NewFileService(core newcore.ICoreController, sender IMessageSender, protoSvc IProtocolService, idSvc IIdentityService, cardGen FileCardGenerator) *FileService {
 	return &FileService{
 		core:            core,
+		sender:          sender,
 		protocolService: protoSvc,
 		identityService: idSvc,
 		cardGenerator:   cardGen,
@@ -121,7 +123,7 @@ func (fs *FileService) AnnounceFile(recipientID, filePath string) (*protocol.Fil
 	}
 
 	log.Printf("INFO: [FileService] Анонсируем файл %s пиру %s", metadata.Filename, recipientID[:8])
-	if err := fs.core.SendDataToPeer(recipientID, envelopeBytes); err != nil {
+	if err := fs.sender.SendSecureEnvelope(recipientID, envelopeBytes); err != nil {
 		return nil, err
 	}
 
@@ -247,7 +249,7 @@ func (fs *FileService) requestFileDownload(metadata *protocol.FileMetadata, send
 
 	// --- Новая логика отправки ---
 	fileControlBytes, err := fs.protocolService.CreateFileControl_DownloadRequest(metadata.TransferId)
-	if err != nil { /*...*/
+	if err != nil {
 		return
 	}
 
@@ -258,11 +260,11 @@ func (fs *FileService) requestFileDownload(metadata *protocol.FileMetadata, send
 	author := fs.identityService.GetMyIdentityPublicKeyProto()
 
 	envelopeBytes, err := fs.protocolService.CreateSecureEnvelope(author, payloadType, ciphertext, nonce)
-	if err != nil { /*...*/
+	if err != nil {
 		return
 	}
 
-	if err := fs.core.SendDataToPeer(senderID, envelopeBytes); err != nil {
+	if err := fs.sender.SendSecureEnvelope(senderID, envelopeBytes); err != nil {
 		log.Printf("ERROR: [FileService] Не удалось отправить DownloadRequest: %v", err)
 		state.Status = "failed"
 	}
@@ -271,7 +273,8 @@ func (fs *FileService) requestFileDownload(metadata *protocol.FileMetadata, send
 // streamFileToPeer открывает стрим и передает по нему файл "кусками".
 func (fs *FileService) streamFileToPeer(state *TransferState, recipientID string) {
 	streamID, err := fs.core.OpenStream(recipientID, newcore.FILE_PROTOCOL_ID)
-	if err != nil { /*...*/
+	if err != nil {
+		log.Printf("ERROR: [FileService SENDER] Не удалось открыть файловый стрим для '%s': %v", state.Metadata.Filename, err)
 		state.Status = "failed"
 		return
 	}
@@ -281,26 +284,29 @@ func (fs *FileService) streamFileToPeer(state *TransferState, recipientID string
 	state.Status = "transferring"
 
 	file, err := os.Open(state.FilePath)
-	if err != nil { /*...*/
+	if err != nil {
+		log.Printf("ERROR: [FileService SENDER] Не удалось открыть файл '%s' для отправки: %v", state.FilePath, err)
 		state.Status = "failed"
-		return
+		return // Важный выход, который вызывает defer
 	}
 	defer file.Close()
 
-	log.Printf("INFO: [FileService] Начата передача файла %s по стриму %d", state.Metadata.Filename, streamID)
+	log.Printf("INFO: [FileService SENDER] Начата передача файла %s по стриму %d", state.Metadata.Filename, streamID)
 	buffer := make([]byte, 64*1024)
 	for {
 		bytesRead, err := file.Read(buffer)
 		if err == io.EOF {
-			break
+			break // Конец файла, это нормально
 		}
-		if err != nil { /*...*/
+		if err != nil {
+			log.Printf("ERROR: [FileService SENDER] Ошибка чтения файла '%s': %v", state.FilePath, err)
 			state.Status = "failed"
 			return
 		}
 
 		chunk := &protocol.FileData{TransferId: state.Metadata.TransferId, ChunkData: buffer[:bytesRead]}
-		if err := fs.sendChunk(streamID, chunk); err != nil { /*...*/
+		if err := fs.sendChunk(streamID, chunk); err != nil {
+			log.Printf("ERROR: [FileService SENDER] Ошибка отправки 'куска' для '%s': %v", state.Metadata.Filename, err)
 			state.Status = "failed"
 			return
 		}
@@ -309,7 +315,10 @@ func (fs *FileService) streamFileToPeer(state *TransferState, recipientID string
 	finalChunk := &protocol.FileData{TransferId: state.Metadata.TransferId, IsLastChunk: true}
 	if err := fs.sendChunk(streamID, finalChunk); err == nil {
 		state.Status = "completed"
-		log.Printf("INFO: [FileService] Передача файла %s завершена.", state.Metadata.Filename)
+		log.Printf("INFO: [FileService SENDER] Передача файла %s завершена.", state.Metadata.Filename)
+	} else {
+		log.Printf("ERROR: [FileService SENDER] Ошибка отправки финального 'куска': %v", err)
+		state.Status = "failed"
 	}
 }
 
@@ -333,13 +342,15 @@ func (fs *FileService) sendChunk(streamID uint64, chunk *protocol.FileData) erro
 func (fs *FileService) processIncomingStream(state *TransferState, pipeReader *io.PipeReader) {
 	defer pipeReader.Close()
 
-	// ... (создание папки и файла)
 	homeDir, _ := os.UserHomeDir()
 	downloadsPath := filepath.Join(homeDir, "Downloads", "OwlWhisper")
 	os.MkdirAll(downloadsPath, 0755)
 	filePath := filepath.Join(downloadsPath, state.Metadata.Filename)
+
 	file, err := os.Create(filePath)
-	if err != nil { /*...*/
+	if err != nil {
+		log.Printf("ERROR: [FileService RECEIVER] Не удалось создать файл: %v", err)
+		state.Status = "failed"
 		return
 	}
 
@@ -347,43 +358,73 @@ func (fs *FileService) processIncomingStream(state *TransferState, pipeReader *i
 	for {
 		msgLen, err := binary.ReadUvarint(streamReader)
 		if err != nil {
+			if err != io.EOF && err != io.ErrClosedPipe {
+				log.Printf("ERROR: [FileService RECEIVER] Ошибка чтения длины 'куска': %v", err)
+			}
 			break
 		}
+		if msgLen == 0 {
+			continue
+		}
+
 		msgData := make([]byte, msgLen)
 		if _, err := io.ReadFull(streamReader, msgData); err != nil {
+			log.Printf("ERROR: [FileService RECEIVER] Ошибка чтения данных 'куска': %v", err)
 			break
 		}
 
 		chunk := &protocol.FileData{}
 		if err := proto.Unmarshal(msgData, chunk); err != nil {
+			log.Printf("WARN: [FileService RECEIVER] Ошибка Unmarshal 'куска': %v", err)
 			continue
 		}
 		if chunk.IsLastChunk {
 			break
 		}
 		if _, err := file.Write(chunk.ChunkData); err != nil {
+			log.Printf("ERROR: [FileService RECEIVER] Ошибка записи в файл: %v", err)
 			break
 		}
 	}
-	file.Close() // Закрываем файл перед проверкой хеша
 
-	// --- Проверка хеша ---
+	// --- ИЗМЕНЕНИЯ ЗДЕСЬ ---
+	// 1. Принудительно сбрасываем буферы ОС на диск перед закрытием файла.
+	if err := file.Sync(); err != nil {
+		log.Printf("ERROR: [FileService RECEIVER] Ошибка file.Sync(): %v", err)
+	}
+	// 2. Закрываем файл, чтобы гарантировать, что все дескрипторы освобождены.
+	if err := file.Close(); err != nil {
+		log.Printf("ERROR: [FileService RECEIVER] Ошибка file.Close(): %v", err)
+	}
+
+	// --- ПРОВЕРКА ХЕША ПОСЛЕ ЗАВЕРШЕНИЯ ---
+	log.Printf("INFO: [FileService RECEIVER] Начинаем проверку хеша для файла %s", state.Metadata.Filename)
+
 	verifyFile, err := os.Open(filePath)
-	if err != nil { /*...*/
+	if err != nil {
+		log.Printf("ERROR: [FileService RECEIVER] Не удалось переоткрыть файл для проверки хеша: %v", err)
 		state.Status = "failed"
 		return
 	}
 	defer verifyFile.Close()
 
 	hasher := sha256.New()
-	io.Copy(hasher, verifyFile)
+	if _, err := io.Copy(hasher, verifyFile); err != nil {
+		log.Printf("ERROR: [FileService RECEIVER] Не удалось вычислить хеш: %v", err)
+		state.Status = "failed"
+		return
+	}
+
 	calculatedHash := fmt.Sprintf("%x", hasher.Sum(nil))
 
 	if calculatedHash == state.Metadata.HashSha256 {
-		log.Printf("SUCCESS: [FileService] Хеш файла %s совпал!", state.Metadata.Filename)
+		log.Printf("SUCCESS: [FileService RECEIVER] Хеш файла %s совпал!", state.Metadata.Filename)
 		state.Status = "completed"
 	} else {
-		log.Printf("ERROR: [FileService] ХЕШ ФАЙЛА %s НЕ СОВПАЛ!", state.Metadata.Filename)
+		log.Printf("ERROR: [FileService RECEIVER] ХЕШ ФАЙЛА %s НЕ СОВПАЛ!", state.Metadata.Filename)
+		// 2. Добавляем детальное логирование хешей
+		log.Printf("  -> Ожидался: %s", state.Metadata.HashSha256)
+		log.Printf("  -> Получен:   %s", calculatedHash)
 		state.Status = "failed"
 	}
 }

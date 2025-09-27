@@ -25,10 +25,11 @@ type AppUI struct {
 	mainWindow fyne.Window
 
 	// --- Источники данных для Fyne ---
-	peerIDLabelText binding.String
-	statusLabelText binding.String
-	messages        binding.UntypedList
-	contacts        binding.UntypedList
+	peerIDLabelText      binding.String
+	statusLabelText      binding.String
+	fingerprintLabelText binding.String
+	messages             binding.UntypedList
+	contacts             binding.UntypedList
 
 	// --- Зависимости (сервисы) ---
 	coreController  newcore.ICoreController
@@ -49,22 +50,25 @@ func NewAppUI(core newcore.ICoreController, privKey crypto.PrivKey) *AppUI {
 	win := a.NewWindow("Owl Whisper")
 
 	ui := &AppUI{
-		app:             a,
-		mainWindow:      win,
-		coreController:  core,
-		messages:        binding.NewUntypedList(),
-		contacts:        binding.NewUntypedList(),
-		peerIDLabelText: binding.NewString(),
-		statusLabelText: binding.NewString(),
+		app:                  a,
+		mainWindow:           win,
+		coreController:       core,
+		messages:             binding.NewUntypedList(),
+		contacts:             binding.NewUntypedList(),
+		peerIDLabelText:      binding.NewString(),
+		statusLabelText:      binding.NewString(),
+		fingerprintLabelText: binding.NewString(),
 	}
 	ui.peerIDLabelText.Set("PeerID: загрузка...")
 	ui.statusLabelText.Set("Статус: инициализация сервисов...")
+	ui.fingerprintLabelText.Set("Отпечаток: ...")
 
 	// --- СБОРКА СЕРВИСНОГО СЛОЯ ВНУТРИ UI ---
 
 	// Базовые сервисы
 	coreCryptoModule := newcore.NewCryptoModule()
 	protocolService := services.NewProtocolService() // Локальная переменная, не нужна в AppUI
+	messageSender := services.NewMessageSender(core)
 
 	privKeyBytes, _ := crypto.MarshalPrivateKey(privKey)
 	var err error
@@ -73,14 +77,15 @@ func NewAppUI(core newcore.ICoreController, privKey crypto.PrivKey) *AppUI {
 		log.Fatalf("Ошибка CryptoService: %v", err)
 	}
 
-	ui.identityService = services.NewIdentityService(cryptoService)
 	trustService := services.NewTrustService(coreCryptoModule)
+	ui.identityService = services.NewIdentityService(cryptoService, trustService)
 
 	// Бизнес-сервисы
-	ui.contactService = services.NewContactService(core, protocolService, cryptoService, ui.identityService, trustService, ui, ui.refreshContacts)
-	ui.chatService = services.NewChatService(core, protocolService, ui.contactService.Provider, ui.onNewChatMessage)
-	ui.fileService = services.NewFileService(core, protocolService, ui.identityService, ui)
-	ui.callService, err = services.NewCallService(core, ui.contactService, protocolService, ui.OnIncomingCall)
+	ui.contactService = services.NewContactService(core, messageSender, protocolService, cryptoService, ui.identityService, trustService, ui, ui.refreshContacts)
+	ui.chatService = services.NewChatService(messageSender, protocolService, ui.identityService, ui.contactService.Provider, ui.onNewChatMessage)
+	ui.fileService = services.NewFileService(core, messageSender, protocolService, ui.identityService, ui)
+	ui.callService, err = services.NewCallService(messageSender, protocolService, ui.OnIncomingCall)
+
 	if err != nil {
 		log.Fatalf("Ошибка CallService: %v", err)
 	}
@@ -179,16 +184,17 @@ func (ui *AppUI) eventLoop() {
 			ui.ShowNicknameDialog(func(nickname string) {
 				ui.identityService.SetMyNickname(nickname)
 				profile := ui.identityService.GetMyProfileContact()
-				ui.mainWindow.SetTitle(fmt.Sprintf("Owl Whisper - %s", profile.FullAddress()))
+				fingerprint := ui.identityService.GetMyFingerprint()
 
-				// ИСПРАВЛЕНИЕ: Принудительно обновляем список контактов,
-				// чтобы в нем корректно отобразился наш собственный профиль.
+				ui.mainWindow.SetTitle(fmt.Sprintf("Owl Whisper - %s", profile.FullAddress()))
+				ui.fingerprintLabelText.Set("Отпечаток: " + fingerprint)
 				ui.refreshContacts()
+				ui.contactService.StartAnnouncing()
 			})
 
 		case "NewMessage":
 			payload := event.Payload.(newcore.NewMessagePayload)
-			ui.dispatcher.HandleIncomingData(payload.SenderID, payload.Data)
+			ui.dispatcher.HandleIncomingData(payload.SenderID, payload.MessageType, payload.Data)
 
 		case "PeerConnected":
 			payload := event.Payload.(newcore.PeerStatusPayload)
@@ -215,9 +221,12 @@ func (ui *AppUI) eventLoop() {
 func (ui *AppUI) buildMainLayout() fyne.CanvasObject {
 	// --- Статус-бар ---
 	peerIdLabel := widget.NewLabelWithData(ui.peerIDLabelText)
+	fingerprintLabel := widget.NewLabelWithData(ui.fingerprintLabelText)
 	peerIdLabel.Selectable = true
+	fingerprintLabel.Selectable = true
 	statusPanel := container.NewVBox(
 		peerIdLabel,
+		fingerprintLabel,
 		widget.NewLabelWithData(ui.statusLabelText),
 		widget.NewSeparator(),
 	)
@@ -268,10 +277,13 @@ func (ui *AppUI) buildContactsList() *widget.List {
 	list.OnSelected = func(id widget.ListItemID) {
 		item, _ := ui.contacts.GetValue(id)
 		contact := item.(*services.Contact)
-		if contact.IsSelf {
-			list.UnselectAll()
-			return
-		}
+
+		// ИСПРАВЛЕНО: Убираем проверку, чтобы разрешить чат с собой ("Избранное")
+		// if contact.IsSelf {
+		// 	list.UnselectAll()
+		// 	return
+		// }
+
 		ui.currentChatPeerID = contact.PeerID
 		ui.statusLabelText.Set(fmt.Sprintf("Открыт чат с %s", contact.Nickname))
 		log.Printf("INFO: Выбран чат с %s", contact.FullAddress())

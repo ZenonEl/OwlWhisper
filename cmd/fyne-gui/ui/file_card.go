@@ -14,8 +14,9 @@ import (
 // FileCard - это кастомный виджет для отображения анонса файла.
 type FileCard struct {
 	widget.BaseWidget
-	metadata   *protocol.FileMetadata
-	onDownload func(metadata *protocol.FileMetadata)
+	metadata       *protocol.FileMetadata
+	onDownload     func(metadata *protocol.FileMetadata)
+	downloadButton *widget.Button
 }
 
 // NewFileCardWidget создает новый экземпляр FileCard.
@@ -29,6 +30,7 @@ func NewFileCardWidget(metadata *protocol.FileMetadata, onDownload func(*protoco
 }
 
 // CreateRenderer создает "рендерер" для нашего виджета.
+
 func (c *FileCard) CreateRenderer() fyne.WidgetRenderer {
 	filename := widget.NewLabel(c.metadata.Filename)
 	filename.TextStyle.Bold = true
@@ -36,12 +38,16 @@ func (c *FileCard) CreateRenderer() fyne.WidgetRenderer {
 	sizeMB := float64(c.metadata.SizeBytes) / 1024.0 / 1024.0
 	sizeLabel := widget.NewLabel(fmt.Sprintf("%.2f MB", sizeMB))
 
-	downloadButton := widget.NewButton("Скачать", func() {
+	// ИЗМЕНЕНО: Создаем кнопку и сохраняем на нее ссылку
+	c.downloadButton = widget.NewButton("Скачать", func() {
 		if c.onDownload != nil {
+			// Отключаем кнопку, чтобы предотвратить повторные нажатия
+			c.downloadButton.Disable()
+			c.downloadButton.SetText("Загрузка...")
 			c.onDownload(c.metadata)
 		}
 	})
 
-	content := container.NewVBox(filename, sizeLabel, downloadButton)
+	content := container.NewVBox(filename, sizeLabel, c.downloadButton)
 	return widget.NewSimpleRenderer(content)
 }

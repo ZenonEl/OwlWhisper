@@ -4,6 +4,7 @@ package services
 import (
 	"log"
 
+	newcore "OwlWhisper/cmd/fyne-gui/new-core"
 	protocol "OwlWhisper/cmd/fyne-gui/new-core/protocol"
 )
 
@@ -28,46 +29,41 @@ func NewMessageDispatcher(protoSvc IProtocolService, cs *ContactService, chs *Ch
 }
 
 // HandleIncomingData определяет тип входящего сообщения и передает его соответствующему обработчику.
-func (d *MessageDispatcher) HandleIncomingData(senderID string, data []byte) {
-	log.Printf("DEBUG [RECEIVER]: Получено сообщение от %s. Длина: %d байт.", senderID, len(data))
+func (d *MessageDispatcher) HandleIncomingData(senderID string, msgType newcore.MessageType, data []byte) {
+	log.Printf("DEBUG [RECEIVER]: Получено сообщение типа %d от %s. Длина: %d байт.", msgType, senderID, len(data))
 
-	// ИСПРАВЛЕНИЕ: Изменен порядок проверок. Начинаем с самых простых/уникальных.
-
-	// Попытка №1: SignalingMessage (WebRTC сигнализация)
-	if signalingMsg, err := d.protocolService.ParseSignalingMessage(data); err == nil {
-		if signalingMsg.Payload != nil {
-			d.handleSignalingMessage(senderID, signalingMsg)
-			return
-		}
-	}
-
-	// Попытка №2: PingEnvelope (неподписанные запросы для обнаружения)
-	if ping, err := d.protocolService.ParsePingEnvelope(data); err == nil {
-		if ping.Payload != nil {
-			d.handlePingEnvelope(senderID, ping)
-			return
-		}
-	}
-
-	// Попытка №3: SignedCommand (управляющие команды)
-	if signedCmd, err := d.protocolService.ParseSignedCommand(data); err == nil {
-		if signedCmd.AuthorIdentity != nil {
-			// Добавляем лог для отладки, чтобы видеть, что мы думаем, что это команда
-			log.Printf("DEBUG [RECEIVER]: Сообщение распознано как SignedCommand.")
-			d.handleSignedCommand(senderID, signedCmd)
-			return
-		}
-	}
-
-	// Попытка №4: SecureEnvelope (конфиденциальные данные чата, файлов и т.д.)
-	if envelope, err := d.protocolService.ParseSecureEnvelope(data); err == nil {
-		if envelope.PayloadType != "" {
+	switch msgType {
+	case newcore.MsgTypeSecureEnvelope:
+		if envelope, err := d.protocolService.ParseSecureEnvelope(data); err == nil {
 			d.handleSecureEnvelope(senderID, envelope)
-			return
+		} else {
+			log.Printf("WARN: [Dispatcher] Ошибка парсинга SecureEnvelope: %v", err)
 		}
-	}
 
-	log.Printf("WARN: [Dispatcher] Не удалось распознать входящее сообщение от %s", senderID)
+	case newcore.MsgTypeSignedCommand:
+		if signedCmd, err := d.protocolService.ParseSignedCommand(data); err == nil {
+			d.handleSignedCommand(senderID, signedCmd)
+		} else {
+			log.Printf("WARN: [Dispatcher] Ошибка парсинга SignedCommand: %v", err)
+		}
+
+	case newcore.MsgTypePingEnvelope:
+		if ping, err := d.protocolService.ParsePingEnvelope(data); err == nil {
+			d.handlePingEnvelope(senderID, ping)
+		} else {
+			log.Printf("WARN: [Dispatcher] Ошибка парсинга PingEnvelope: %v", err)
+		}
+
+	case newcore.MsgTypeSignaling:
+		if signalingMsg, err := d.protocolService.ParseSignalingMessage(data); err == nil {
+			d.handleSignalingMessage(senderID, signalingMsg)
+		} else {
+			log.Printf("WARN: [Dispatcher] Ошибка парсинга SignalingMessage: %v", err)
+		}
+
+	default:
+		log.Printf("WARN: [Dispatcher] Получено сообщение неизвестного типа от %s", senderID)
+	}
 }
 
 // handleSignedCommand распаковывает и маршрутизирует криптографически подписанные команды.
