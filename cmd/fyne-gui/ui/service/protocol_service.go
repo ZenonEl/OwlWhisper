@@ -65,6 +65,8 @@ type IProtocolService interface {
 	CreateSignaling_Answer(callID, sdp string) ([]byte, error)
 	CreateSignaling_Candidate(callID, candidate string) ([]byte, error)
 	CreateSignaling_Hangup(callID string, reason protocol.CallHangup_Reason) ([]byte, error)
+
+	CreateFileControl_ChunkAck(transferID string, offset int64) ([]byte, error)
 }
 
 // protocolService - конкретная реализация IProtocolService.
@@ -268,4 +270,15 @@ func (ps *protocolService) CreateSignaling_Hangup(callID string, reason protocol
 		Payload: &protocol.SignalingMessage_Hangup{Hangup: &protocol.CallHangup{Reason: reason}},
 	}
 	return proto.Marshal(msg)
+}
+
+func (ps *protocolService) CreateFileControl_ChunkAck(transferID string, offset int64) ([]byte, error) {
+	ack := &protocol.FileChunkAck{
+		TransferId:         transferID,
+		AcknowledgedOffset: offset,
+	}
+	control := &protocol.FileControl{
+		Payload: &protocol.FileControl_Ack{Ack: ack},
+	}
+	return proto.Marshal(control)
 }

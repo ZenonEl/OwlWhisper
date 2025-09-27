@@ -117,6 +117,7 @@ func (d *MessageDispatcher) handlePingEnvelope(senderID string, ping *protocol.P
 func (d *MessageDispatcher) handleSecureEnvelope(senderID string, envelope *protocol.SecureEnvelope) {
 	// !!! ЗАГЛУШКА ДЛЯ РАСШИФРОВКИ !!!
 	plaintext := envelope.Ciphertext
+	log.Printf("DEBUG [Dispatcher]: Обработка SecureEnvelope. PayloadType: '%s'", envelope.PayloadType)
 
 	switch envelope.PayloadType {
 	case "protocol.ChatContent":
@@ -156,10 +157,13 @@ func (d *MessageDispatcher) handleChatContent(senderID string, content *protocol
 
 // handleFileControl маршрутизирует команды для управления передачей файлов.
 func (d *MessageDispatcher) handleFileControl(senderID string, content *protocol.FileControl) {
+	log.Printf("DEBUG [Dispatcher]: Обработка FileControl. Тип: %T", content.Payload)
 	switch payload := content.Payload.(type) {
 	case *protocol.FileControl_Request:
 		d.fileService.HandleDownloadRequest(payload.Request, senderID)
-		// ... другие команды управления файлами ...
+
+	case *protocol.FileControl_Ack:
+		d.fileService.HandleChunkAck(payload.Ack)
 	}
 }
 
