@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"github.com/google/uuid"
@@ -18,6 +19,12 @@ import (
 
 	newcore "OwlWhisper/cmd/fyne-gui/new-core"
 	protocol "OwlWhisper/cmd/fyne-gui/new-core/protocol"
+)
+
+const (
+	// Размер одного "окна" данных, после которого мы ждем подтверждение.
+	// 16 МБ - хороший баланс между накладными расходами и отзывчивостью.
+	fileTransferWindowSize = 16 * 1024 * 1024
 )
 
 // FileCardGenerator определяет интерфейс для UI, который умеет создавать виджеты файлов.
@@ -34,6 +41,7 @@ type TransferState struct {
 	StreamID   uint64
 	Status     string // "announced", "downloading", "transferring", "completed", "failed"
 	pipeWriter *io.PipeWriter
+	ackChan    chan int64
 }
 
 // FileService управляет всей логикой передачи файлов.
@@ -130,6 +138,19 @@ func (fs *FileService) AnnounceFile(recipientID, filePath string) (*protocol.Fil
 	return metadata, nil
 }
 
+func (fs *FileService) HandleChunkAck(ack *protocol.FileChunkAck) {
+	fs.mu.RLock()
+	state, ok := fs.transfers[ack.TransferId]
+	fs.mu.RUnlock()
+
+	if !ok || state.ackChan == nil {
+		return // Это ACK для передачи, которую мы не отслеживаем, или она не ждет ACK.
+	}
+
+	// Отправляем полученное смещение в канал, чтобы разблокировать отправителя.
+	state.ackChan <- ack.AcknowledgedOffset
+}
+
 // ================================================================= //
 //               ПУБЛИЧНЫЕ МЕТОДЫ (ОБРАБОТЧИКИ от DISPATCHER)         //
 // ================================================================= //
@@ -157,15 +178,18 @@ func (fs *FileService) HandleFileAnnouncement(senderID string, metadata *protoco
 
 // HandleDownloadRequest вызывается из Dispatcher'а при получении запроса на скачивание.
 func (fs *FileService) HandleDownloadRequest(req *protocol.FileDownloadRequest, senderID string) {
-	fs.mu.RLock()
+	fs.mu.Lock() // Используем полную блокировку, так как будем изменять state
 	state, ok := fs.transfers[req.TransferId]
-	fs.mu.RUnlock()
-
 	if !ok {
+		fs.mu.Unlock()
 		log.Printf("WARN: [FileService] Получен запрос на скачивание неизвестного transferID: %s", req.TransferId)
-		// TODO: Отправить FileTransferStatus{UNAVAILABLE}
 		return
 	}
+
+	// 1. Создаем и присваиваем канал ДО запуска горутины.
+	// Теперь это изменение гарантированно будет видно всем.
+	state.ackChan = make(chan int64)
+	fs.mu.Unlock()
 
 	log.Printf("INFO: [FileService] Получен запрос на скачивание файла %s от %s", state.Metadata.Filename, senderID[:8])
 	go fs.streamFileToPeer(state, senderID)
@@ -199,7 +223,7 @@ func (fs *FileService) HandleIncomingStream(payload newcore.NewIncomingStreamPay
 	fs.mu.Unlock()
 
 	log.Printf("INFO: [FileService] Входящий стрим %d связан с файлом %s.", payload.StreamID, state.Metadata.Filename)
-	go fs.processIncomingStream(state, pr) // Передаем pipeReader
+	go fs.processIncomingStream(state, pr, payload.PeerID) // Передаем pipeReader
 }
 
 // HandleStreamData просто пишет входящие байты в "трубу", связанную со стримом.
@@ -270,8 +294,16 @@ func (fs *FileService) requestFileDownload(metadata *protocol.FileMetadata, send
 	}
 }
 
-// streamFileToPeer открывает стрим и передает по нему файл "кусками".
+// streamFileToPeer открывает стрим и передает по нему файл "окнами" с ожиданием подтверждений.
 func (fs *FileService) streamFileToPeer(state *TransferState, recipientID string) {
+	// Defer для закрытия канала ACK. Он должен быть первым, чтобы выполниться последним.
+	defer func() {
+		if state.ackChan != nil {
+			close(state.ackChan)
+			state.ackChan = nil
+		}
+	}()
+
 	streamID, err := fs.core.OpenStream(recipientID, newcore.FILE_PROTOCOL_ID)
 	if err != nil {
 		log.Printf("ERROR: [FileService SENDER] Не удалось открыть файловый стрим для '%s': %v", state.Metadata.Filename, err)
@@ -287,38 +319,104 @@ func (fs *FileService) streamFileToPeer(state *TransferState, recipientID string
 	if err != nil {
 		log.Printf("ERROR: [FileService SENDER] Не удалось открыть файл '%s' для отправки: %v", state.FilePath, err)
 		state.Status = "failed"
-		return // Важный выход, который вызывает defer
+		return
 	}
 	defer file.Close()
 
-	log.Printf("INFO: [FileService SENDER] Начата передача файла %s по стриму %d", state.Metadata.Filename, streamID)
+	log.Printf("INFO: [FileService SENDER] Начата передача файла %s (размер окна: %d MB)", state.Metadata.Filename, fileTransferWindowSize/1024/1024)
+
+	var totalBytesSent int64 = 0
 	buffer := make([]byte, 64*1024)
-	for {
-		bytesRead, err := file.Read(buffer)
-		if err == io.EOF {
-			break // Конец файла, это нормально
-		}
-		if err != nil {
-			log.Printf("ERROR: [FileService SENDER] Ошибка чтения файла '%s': %v", state.FilePath, err)
-			state.Status = "failed"
-			return
+
+	// Главный цикл отправки "окон"
+	for totalBytesSent < state.Metadata.SizeBytes {
+		bytesSentInWindow := 0
+		// Внутренний цикл: отправляем одно "окно" данных
+		for bytesSentInWindow < fileTransferWindowSize && totalBytesSent < state.Metadata.SizeBytes {
+			bytesToRead := len(buffer)
+			if int64(bytesSentInWindow+bytesToRead) > fileTransferWindowSize {
+				bytesToRead = fileTransferWindowSize - bytesSentInWindow
+			}
+			if leftInFile := state.Metadata.SizeBytes - totalBytesSent; int64(bytesToRead) > leftInFile {
+				bytesToRead = int(leftInFile)
+			}
+
+			n, err := file.Read(buffer[:bytesToRead])
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				log.Printf("ERROR: [FileService SENDER] Ошибка чтения файла '%s': %v", state.FilePath, err)
+				state.Status = "failed"
+				return
+			}
+
+			chunk := &protocol.FileData{TransferId: state.Metadata.TransferId, ChunkData: buffer[:n]}
+			if err := fs.sendChunk(streamID, chunk); err != nil {
+				log.Printf("ERROR: [FileService SENDER] Ошибка отправки 'куска' для '%s': %v", state.Metadata.Filename, err)
+				state.Status = "failed"
+				return
+			}
+
+			bytesSentInWindow += n
+			totalBytesSent += int64(n)
 		}
 
-		chunk := &protocol.FileData{TransferId: state.Metadata.TransferId, ChunkData: buffer[:bytesRead]}
-		if err := fs.sendChunk(streamID, chunk); err != nil {
-			log.Printf("ERROR: [FileService SENDER] Ошибка отправки 'куска' для '%s': %v", state.Metadata.Filename, err)
-			state.Status = "failed"
-			return
+		// --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
+		// Ждем промежуточный ACK, ТОЛЬКО если мы отправили данные, И файл еще НЕ закончен.
+		if bytesSentInWindow > 0 && totalBytesSent < state.Metadata.SizeBytes {
+			log.Printf("INFO: [FileService SENDER] Отправлено %d MB, ожидание ACK...", totalBytesSent/1024/1024)
+			select {
+			case offset, ok := <-state.ackChan:
+				if !ok {
+					log.Printf("ERROR: [FileService SENDER] Канал ACK был закрыт преждевременно.")
+					state.Status = "failed"
+					return
+				}
+				if offset < totalBytesSent {
+					log.Printf("ERROR: [FileService SENDER] Получен неверный ACK (ожидалось >= %d, получено %d)", totalBytesSent, offset)
+					state.Status = "failed"
+					return
+				}
+				log.Printf("INFO: [FileService SENDER] ACK получен. Продолжаем передачу.")
+			case <-time.After(60 * time.Second):
+				log.Printf("ERROR: [FileService SENDER] Таймаут ожидания ACK.")
+				state.Status = "failed"
+				return
+			}
 		}
 	}
 
+	// --- ФИНАЛИЗАЦИЯ ПЕРЕДАЧИ ---
+
+	log.Printf("INFO: [FileService SENDER] Все данные отправлены. Отправка final chunk...")
 	finalChunk := &protocol.FileData{TransferId: state.Metadata.TransferId, IsLastChunk: true}
-	if err := fs.sendChunk(streamID, finalChunk); err == nil {
-		state.Status = "completed"
-		log.Printf("INFO: [FileService SENDER] Передача файла %s завершена.", state.Metadata.Filename)
-	} else {
+	if err := fs.sendChunk(streamID, finalChunk); err != nil {
 		log.Printf("ERROR: [FileService SENDER] Ошибка отправки финального 'куска': %v", err)
 		state.Status = "failed"
+		return
+	}
+
+	log.Printf("INFO: [FileService SENDER] Ожидание финального ACK...")
+	select {
+	case offset, ok := <-state.ackChan:
+		if !ok {
+			log.Printf("ERROR: [FileService SENDER] Канал ACK был закрыт преждевременно при ожидании финала.")
+			state.Status = "failed"
+			return
+		}
+		if offset < totalBytesSent {
+			log.Printf("ERROR: [FileService SENDER] Получен неверный финальный ACK (ожидалось >= %d, получено %d)", totalBytesSent, offset)
+			state.Status = "failed"
+			return
+		}
+		state.Status = "completed"
+		log.Printf("SUCCESS: [FileService SENDER] Финальный ACK получен! Передача файла %s успешно завершена.", state.Metadata.Filename)
+
+	case <-time.After(60 * time.Second):
+		log.Printf("ERROR: [FileService SENDER] Таймаут ожидания финального ACK.")
+		state.Status = "failed"
+		return
 	}
 }
 
@@ -339,7 +437,7 @@ func (fs *FileService) sendChunk(streamID uint64, chunk *protocol.FileData) erro
 }
 
 // processIncomingStream читает "куски" из "трубы", пишет их в файл и проверяет хеш.
-func (fs *FileService) processIncomingStream(state *TransferState, pipeReader *io.PipeReader) {
+func (fs *FileService) processIncomingStream(state *TransferState, pipeReader *io.PipeReader, senderID string) {
 	defer pipeReader.Close()
 
 	homeDir, _ := os.UserHomeDir()
@@ -353,7 +451,8 @@ func (fs *FileService) processIncomingStream(state *TransferState, pipeReader *i
 		state.Status = "failed"
 		return
 	}
-
+	var totalBytesReceived int64 = 0
+	var bytesSinceLastAck int64 = 0
 	streamReader := bufio.NewReader(pipeReader)
 	for {
 		msgLen, err := binary.ReadUvarint(streamReader)
@@ -385,7 +484,20 @@ func (fs *FileService) processIncomingStream(state *TransferState, pipeReader *i
 			log.Printf("ERROR: [FileService RECEIVER] Ошибка записи в файл: %v", err)
 			break
 		}
+		totalBytesReceived += int64(len(chunk.ChunkData))
+		bytesSinceLastAck += int64(len(chunk.ChunkData))
+
+		// 1. Проверяем, не пора ли отправить ACK
+		if bytesSinceLastAck >= fileTransferWindowSize {
+			log.Printf("INFO: [FileService RECEIVER] Получено %d MB, отправка ACK...", totalBytesReceived/1024/1024)
+			fs.sendAck(senderID, state.Metadata.TransferId, totalBytesReceived)
+			bytesSinceLastAck = 0 // Сбрасываем счетчик
+		}
 	}
+
+	// 2. Отправляем финальный ACK после завершения цикла
+	log.Printf("INFO: [FileService RECEIVER] Цикл завершен, отправка финального ACK на %d байт", totalBytesReceived)
+	fs.sendAck(senderID, state.Metadata.TransferId, totalBytesReceived)
 
 	// --- ИЗМЕНЕНИЯ ЗДЕСЬ ---
 	// 1. Принудительно сбрасываем буферы ОС на диск перед закрытием файла.
@@ -437,4 +549,26 @@ func (fs *FileService) findTransferByStreamID(streamID uint64) (*TransferState, 
 		}
 	}
 	return nil, false
+}
+
+func (fs *FileService) sendAck(recipientID, transferID string, offset int64) {
+	ackBytes, err := fs.protocolService.CreateFileControl_ChunkAck(transferID, offset)
+	if err != nil {
+		return
+	}
+
+	// TODO: Заменить на реальное шифрование
+	ciphertext := ackBytes
+	nonce := []byte("dummy-nonce-ack")
+	payloadType := fs.protocolService.GetPayloadType(&protocol.FileControl{})
+	author := fs.identityService.GetMyIdentityPublicKeyProto()
+	envelopeBytes, err := fs.protocolService.CreateSecureEnvelope(author, payloadType, ciphertext, nonce)
+	if err != nil {
+		return
+	}
+
+	// Отправляем ACK "тихо", в фоне.
+	if err := fs.sender.SendSecureEnvelope(recipientID, envelopeBytes); err != nil {
+		log.Printf("WARN: [FileService] Не удалось отправить ACK для %s", transferID)
+	}
 }
