@@ -2,6 +2,7 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"strings"
@@ -101,10 +102,12 @@ type ContactUIManager interface {
 type ContactService struct {
 	// --- Зависимости ---
 	core            newcore.ICoreController
+	sender          IMessageSender
 	protocolService IProtocolService
 	cryptoService   ICryptoService
 	identityService IIdentityService
 	trustService    ITrustService
+	cancelAnnounce  context.CancelFunc
 	uiManager       ContactUIManager
 
 	// --- Внутреннее состояние ---
@@ -125,6 +128,7 @@ type pendingVerification struct {
 // NewContactService - конструктор для ContactService.
 func NewContactService(
 	core newcore.ICoreController,
+	sender IMessageSender,
 	protoSvc IProtocolService,
 	cryptoSvc ICryptoService,
 	idSvc IIdentityService,
@@ -134,26 +138,38 @@ func NewContactService(
 ) *ContactService {
 	cs := &ContactService{
 		core:                 core,
+		sender:               sender,
 		protocolService:      protoSvc,
 		cryptoService:        cryptoSvc,
 		identityService:      idSvc,
 		trustService:         trustSvc,
 		uiManager:            uiManager,
-		Provider:             NewInMemoryContactProvider(), // ИСПРАВЛЕНО: Вызов функции
+		Provider:             NewInMemoryContactProvider(),
 		onUpdate:             onUpdate,
 		pendingVerifications: make(map[string]*pendingVerification),
 		pendingInvitations:   make(map[string]*protocol.SignedCommand),
 	}
 
-	// ИСПРАВЛЕНО: Используем методы, которые мы определим в IIdentityService
-	myProfile := idSvc.GetMyProfileContact()
-	cs.Provider.AddContact(myProfile)
 	return cs
 }
 
 // ================================================================= //
 //                      ПУБЛИЧНЫЕ МЕТОДЫ (API для UI)                  //
 // ================================================================= //
+
+func (cs *ContactService) StartAnnouncing() {
+	// Если уже была запущена, останавливаем старую горутину
+	if cs.cancelAnnounce != nil {
+		cs.cancelAnnounce()
+	}
+
+	// Создаем новый контекст, чтобы мы могли остановить горутину в будущем
+	ctx, cancel := context.WithCancel(context.Background())
+	cs.cancelAnnounce = cancel
+
+	log.Println("INFO: [ContactService] Запуск цикла анонсирования профиля...")
+	go cs.announceLoop(ctx)
+}
 
 // SearchAndVerifyContact запускает полный процесс поиска и верификации контакта.
 func (cs *ContactService) SearchAndVerifyContact(address string, onStatusUpdate func(string), onError func(error)) {
@@ -226,6 +242,14 @@ func (cs *ContactService) AcceptChatInvitation(senderPeerID string) {
 
 // GetContacts возвращает текущий список контактов для отображения.
 func (cs *ContactService) GetContacts() []*Contact {
+	// 1. Получаем самый свежий профиль "себя" из IdentityService.
+	myProfile := cs.identityService.GetMyProfileContact()
+
+	// 2. Обновляем (или добавляем) этот профиль в наше хранилище контактов.
+	// Метод AddContact работает как "upsert" (update or insert).
+	cs.Provider.AddContact(myProfile)
+
+	// 3. Возвращаем полный список из хранилища.
 	return cs.Provider.GetContacts()
 }
 
@@ -316,6 +340,50 @@ func (cs *ContactService) HandleAcknowledgeContext(senderID string, cmd *protoco
 //                    ВНУТРЕННИЕ МЕТОДЫ (ЛОГИКА)                     //
 // ================================================================= //
 
+// announceLoop периодически анонсирует профиль в DHT.
+func (cs *ContactService) announceLoop(ctx context.Context) {
+	// Даем DHT немного времени на "разогрев" перед первым анонсом
+	select {
+	case <-time.After(10 * time.Second):
+	case <-ctx.Done():
+		return
+	}
+
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	doAnnounce := func() {
+		profile := cs.identityService.GetMyProfileContact()
+		if profile.PeerID == "загрузка..." || profile.Nickname == "..." {
+			return // Профиль еще не готов, пропускаем этот тик
+		}
+
+		contentID, err := newcore.CreateContentID(profile.FullAddress())
+		if err != nil {
+			log.Printf("ERROR: [ContactService] Не удалось создать ContentID для анонса: %v", err)
+			return
+		}
+
+		if err := cs.core.ProvideContent(contentID); err != nil {
+			log.Printf("WARN: [ContactService] Ошибка анонсирования профиля: %v", err)
+		} else {
+			log.Printf("INFO: [ContactService] Профиль %s успешно анонсирован в DHT.", profile.FullAddress())
+		}
+	}
+
+	doAnnounce() // Первый анонс
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("INFO: [ContactService] Остановка цикла анонсирования.")
+			return
+		case <-ticker.C:
+			doAnnounce()
+		}
+	}
+}
+
 // findPeer ищет пира в сети по адресу (PeerID или nickname#disc).
 func (cs *ContactService) findPeer(address string) (peer.AddrInfo, error) {
 	if strings.HasPrefix(address, "12D3KooW") {
@@ -350,7 +418,7 @@ func (cs *ContactService) sendProfileRequest(recipientID peer.ID) error {
 	if err != nil {
 		return fmt.Errorf("ошибка создания пинга: %w", err)
 	}
-	return cs.core.SendDataToPeer(recipientID.String(), pingMsg)
+	return cs.sender.SendPingEnvelope(recipientID.String(), pingMsg)
 }
 
 // sendDiscloseProfileResponse отправляет подписанный профиль в ответ на "пинг".
@@ -365,15 +433,6 @@ func (cs *ContactService) sendDiscloseProfileResponse(recipientID string) error 
 	}
 
 	signature, err := cs.cryptoService.Sign(commandData)
-	if err != nil {
-		return err
-	}
-
-	signedCmd, err := cs.protocolService.CreateSignedCommand(
-		cs.identityService.GetMyIdentityPublicKeyProto(),
-		commandData,
-		signature,
-	)
 	if err != nil {
 		return err
 	}
@@ -396,10 +455,10 @@ func (cs *ContactService) sendDiscloseProfileResponse(recipientID string) error 
 	}
 
 	log.Printf("INFO: [ContactService] Отправка DiscloseProfile пиру %s", recipientID)
-	return cs.core.SendDataToPeer(recipientID, signedCmd)
+	return cs.sender.SendSignedCommand(recipientID, signedCmdBytes)
 }
 
-func (cs *ContactService) sendAcknowledgeContext(recipientID string, originalCmd *protocol.SignedCommand) error {
+func (cs *ContactService) sendAcknowledgeContext(recipientPeerID string, originalCmd *protocol.SignedCommand) error {
 	innerOriginalCmd, _ := cs.protocolService.ParseCommand(originalCmd.CommandData)
 	contextID := innerOriginalCmd.ContextId
 
@@ -426,8 +485,8 @@ func (cs *ContactService) sendAcknowledgeContext(recipientID string, originalCmd
 		return err
 	}
 
-	log.Printf("INFO: [ContactService] Отправка AcknowledgeContext пиру %s", recipientID)
-	return cs.core.SendDataToPeer(recipientID, signedCmd)
+	log.Printf("INFO: [ContactService] Отправка AcknowledgeContext пиру %s", recipientPeerID)
+	return cs.sender.SendSignedCommand(recipientPeerID, signedCmd)
 }
 
 // sendInitiateContext отправляет формальный запрос на добавление в контакты.
@@ -453,13 +512,13 @@ func (cs *ContactService) sendInitiateContext(recipientPeerID string, recipientP
 		return err
 	}
 
-	signedCmd, err := cs.protocolService.CreateSignedCommand(myIdentityProto, commandData, signature)
+	signedCmdBytes, err := cs.protocolService.CreateSignedCommand(myIdentityProto, commandData, signature)
 	if err != nil {
 		return err
 	}
 
 	log.Printf("INFO: [ContactService] Отправка InitiateContext пиру %s", recipientPeerID)
-	return cs.core.SendDataToPeer(recipientPeerID, signedCmd)
+	return cs.sender.SendSignedCommand(recipientPeerID, signedCmdBytes)
 }
 
 // extractProfileFromCmd - хелпер для извлечения профиля из разных типов команд.
