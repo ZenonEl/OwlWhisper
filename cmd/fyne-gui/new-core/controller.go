@@ -26,6 +26,16 @@ const (
 	FILE_PROTOCOL_ID = "/owl-whisper/file/1.0.0"
 )
 
+type MessageType byte
+
+const (
+	MsgTypeUnknown        MessageType = 0x00
+	MsgTypeSecureEnvelope MessageType = 0x01
+	MsgTypeSignedCommand  MessageType = 0x02
+	MsgTypePingEnvelope   MessageType = 0x03
+	MsgTypeSignaling      MessageType = 0x04
+)
+
 // --- Структуры Событий (Контракт с GUI) ---
 
 // Event - это универсальная структура для всех асинхронных событий,
@@ -37,8 +47,9 @@ type Event struct {
 
 // NewMessagePayload содержит данные для события "NewMessage".
 type NewMessagePayload struct {
-	SenderID string `json:"sender_id"`
-	Data     []byte `json:"data"`
+	SenderID    string      `json:"sender_id"`
+	MessageType MessageType `json:"message_type"`
+	Data        []byte      `json:"data"`
 }
 
 type CoreReadyPayload struct {
@@ -298,10 +309,35 @@ func (c *CoreController) handleGenericStream(stream network.Stream) {
 		log.Printf("ERROR: Не удалось прочитать данные из потока от %s: %v", senderID.ShortString(), err)
 		return
 	}
-	log.Printf("DEBUG [CORE]: Получены сырые данные по стриму от %s. Длина: %d байт.", senderID.ShortString(), len(data))
+
+	if len(data) < 1 {
+		log.Printf("WARN: Получено пустое сообщение от %s", senderID.ShortString())
+		return
+	}
+
+	msgTypeByte := data[0]
+	payloadData := data[1:]
+
+	var msgType MessageType
+	switch msgTypeByte {
+	case byte(MsgTypeSecureEnvelope):
+		msgType = MsgTypeSecureEnvelope
+	case byte(MsgTypeSignedCommand):
+		msgType = MsgTypeSignedCommand
+	case byte(MsgTypePingEnvelope):
+		msgType = MsgTypePingEnvelope
+	case byte(MsgTypeSignaling):
+		msgType = MsgTypeSignaling
+	default:
+		log.Printf("DEBUG [CORE]: Получен НЕИЗВЕСТНЫЙ тип сообщения. Первый байт (префикс): %d", msgTypeByte)
+		// ================================================================= //
+		msgType = MsgTypeUnknown
+	}
+
 	c.pushEvent("NewMessage", NewMessagePayload{
-		SenderID: senderID.String(),
-		Data:     data,
+		SenderID:    senderID.String(),
+		MessageType: msgType,
+		Data:        payloadData,
 	})
 }
 
