@@ -141,7 +141,7 @@ func NewCoreController(privKey crypto.PrivKey, cfg Config) (ICoreController, err
 		cancel:         cancel,
 		cfg:            cfg,
 		privKey:        privKey,
-		eventChan:      make(chan Event, 100),
+		eventChan:      make(chan Event, 1000),
 		connectedPeers: make(map[peer.ID]bool),
 		activeStreams:  make(map[uint64]network.Stream),
 		joinedTopics:   make(map[string]*pubsub.Topic),
