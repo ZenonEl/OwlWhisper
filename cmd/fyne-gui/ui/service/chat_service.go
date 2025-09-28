@@ -6,7 +6,6 @@ import (
 	"log"
 
 	protocol "OwlWhisper/cmd/fyne-gui/new-core/protocol"
-	encryption "OwlWhisper/cmd/fyne-gui/ui/service/encryption"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/widget"
@@ -89,45 +88,4 @@ func (cs *ChatService) SendTextMessage(recipientID string, text string) error {
 
 	// 4. Отправляем
 	return cs.sender.SendSecureEnvelope(recipientID, envelopeBytes)
-}
-
-// HandleEncryptedMessage вызывается из Dispatcher'а.
-func (cs *ChatService) HandleEncryptedMessage(senderID string, envelope *protocol.SecureEnvelope) {
-	contextID := CreateContextIDForPeers(cs.identityService.GetMyPeerID(), senderID)
-
-	encryptedMsg := &encryption.EncryptedMessage{
-		Ciphertext: envelope.Ciphertext,
-		Nonce:      envelope.Nonce,
-	}
-
-	// ================================================================= //
-	//                      ЛОГ №3: ЗАШИФРОВАННЫЙ ТЕКСТ (ПОЛУЧЕНИЕ)      //
-	// ================================================================= //
-	log.Printf("DEBUG [DECRYPT]: Получен зашифрованный текст (ciphertext): %x", encryptedMsg.Ciphertext)
-
-	// 1. Расшифровываем
-	plaintextBytes, err := cs.sessionService.DecryptForSession(contextID, encryptedMsg)
-	if err != nil {
-		log.Printf("WARN: [ChatService] Не удалось расшифровать сообщение от %s: %v", senderID, err)
-		return
-	}
-	if plaintextBytes == nil {
-		return // Сообщение поставлено в очередь
-	}
-
-	// ================================================================= //
-	//                      ЛОГ №4: ОТКРЫТЫЙ ТЕКСТ (ПОЛУЧЕНИЕ)           //
-	// ================================================================= //
-	log.Printf("DEBUG [DECRYPT]: Открытый текст (сериализованный): %x", plaintextBytes)
-
-	// 2. Распаковываем ChatContent
-	chatContent, err := cs.protocolService.ParseChatContent(plaintextBytes)
-	if err != nil {
-		log.Printf("WARN: [ChatService] Не удалось распарсить ChatContent после расшифровки: %v", err)
-		return
-	}
-
-	if textMsg := chatContent.GetText(); textMsg != nil {
-		cs.ProcessTextMessage(senderID, textMsg)
-	}
 }

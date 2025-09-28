@@ -88,7 +88,7 @@ func NewAppUI(core newcore.ICoreController, privKey crypto.PrivKey) *AppUI {
 	// Бизнес-сервисы
 	ui.contactService = services.NewContactService(core, messageSender, protocolService, cryptoService, ui.identityService, trustService, sessionService, ui, ui.refreshContacts)
 	ui.chatService = services.NewChatService(messageSender, protocolService, ui.identityService, sessionService, ui.contactService.Provider, ui.onNewChatMessage)
-	ui.fileService = services.NewFileService(core, messageSender, protocolService, ui.identityService, ui)
+	ui.fileService = services.NewFileService(core, messageSender, protocolService, ui.identityService, sessionService, ui)
 	ui.callService, err = services.NewCallService(messageSender, protocolService, ui.OnIncomingCall)
 
 	if err != nil {
@@ -96,7 +96,7 @@ func NewAppUI(core newcore.ICoreController, privKey crypto.PrivKey) *AppUI {
 	}
 
 	// Диспетчер
-	ui.dispatcher = services.NewMessageDispatcher(protocolService, ui.contactService, ui.chatService, ui.fileService, ui.callService)
+	ui.dispatcher = services.NewMessageDispatcher(protocolService, sessionService, ui.contactService, ui.chatService, ui.fileService, ui.callService)
 
 	win.SetContent(ui.buildMainLayout())
 	win.Resize(fyne.NewSize(800, 600))

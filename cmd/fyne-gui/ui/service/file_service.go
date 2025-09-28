@@ -19,6 +19,7 @@ import (
 
 	newcore "OwlWhisper/cmd/fyne-gui/new-core"
 	protocol "OwlWhisper/cmd/fyne-gui/new-core/protocol"
+	encryption "OwlWhisper/cmd/fyne-gui/ui/service/encryption"
 )
 
 const (
@@ -51,6 +52,7 @@ type FileService struct {
 	sender          IMessageSender
 	protocolService IProtocolService
 	identityService IIdentityService
+	sessionService  ISessionService
 	cardGenerator   FileCardGenerator // Зависимость от интерфейса, а не от реализации
 
 	// --- Внутреннее состояние ---
@@ -59,12 +61,13 @@ type FileService struct {
 }
 
 // NewFileService - конструктор для FileService.
-func NewFileService(core newcore.ICoreController, sender IMessageSender, protoSvc IProtocolService, idSvc IIdentityService, cardGen FileCardGenerator) *FileService {
+func NewFileService(core newcore.ICoreController, sender IMessageSender, protoSvc IProtocolService, idSvc IIdentityService, sessionSvc ISessionService, cardGen FileCardGenerator) *FileService {
 	return &FileService{
 		core:            core,
 		sender:          sender,
 		protocolService: protoSvc,
 		identityService: idSvc,
+		sessionService:  sessionSvc,
 		cardGenerator:   cardGen,
 		transfers:       make(map[string]*TransferState),
 	}
@@ -112,29 +115,32 @@ func (fs *FileService) AnnounceFile(recipientID, filePath string) (*protocol.Fil
 	fs.mu.Unlock()
 
 	// --- Новая логика отправки ---
-	// 1. Создаем ChatContent с анонсом файла
+	contextID := CreateContextIDForPeers(fs.identityService.GetMyPeerID(), recipientID)
+
+	// 1. Создаем и сериализуем ChatContent
 	chatContentBytes, err := fs.protocolService.CreateChatContent_FileMetadata(metadata)
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. "Шифруем" (пока заглушка) и упаковываем в SecureEnvelope
-	// TODO: Заменить на реальное шифрование
-	ciphertext := chatContentBytes
-	nonce := []byte("dummy-nonce-files")
-	payloadType := fs.protocolService.GetPayloadType(&protocol.ChatContent{})
-	author := fs.identityService.GetMyIdentityPublicKeyProto()
-
-	envelopeBytes, err := fs.protocolService.CreateSecureEnvelope(author, payloadType, ciphertext, nonce)
+	// 2. Шифруем его основным ключом сессии
+	encryptedMsg, err := fs.sessionService.EncryptForSession(contextID, chatContentBytes)
 	if err != nil {
 		return nil, err
 	}
 
-	log.Printf("INFO: [FileService] Анонсируем файл %s пиру %s", metadata.Filename, recipientID[:8])
-	if err := fs.sender.SendSecureEnvelope(recipientID, envelopeBytes); err != nil {
+	// 3. Упаковываем в SecureEnvelope
+	author := fs.identityService.GetMyIdentityPublicKeyProto()
+	payloadType := "encrypted/chat-v1"
+	envelopeBytes, err := fs.protocolService.CreateSecureEnvelope(author, payloadType, encryptedMsg.Ciphertext, encryptedMsg.Nonce)
+	if err != nil {
 		return nil, err
 	}
 
+	// 4. Отправляем
+	if err := fs.sender.SendSecureEnvelope(recipientID, envelopeBytes); err != nil {
+		return nil, err
+	}
 	return metadata, nil
 }
 
@@ -257,7 +263,7 @@ func (fs *FileService) HandleStreamClosed(payload newcore.StreamClosedPayload) {
 //                    ВНУТРЕННИЕ МЕТОДЫ (ЛОГИКА)                     //
 // ================================================================= //
 
-// requestFileDownload отправляет по сети запрос на начало скачивания.
+// requestFileDownload шифрует и отправляет по сети запрос на начало скачивания.
 func (fs *FileService) requestFileDownload(metadata *protocol.FileMetadata, senderID string) {
 	fs.mu.Lock()
 	state, ok := fs.transfers[metadata.TransferId]
@@ -271,26 +277,31 @@ func (fs *FileService) requestFileDownload(metadata *protocol.FileMetadata, send
 
 	log.Printf("INFO: [FileService] Запрашиваем скачивание файла %s от %s", metadata.Filename, senderID[:8])
 
-	// --- Новая логика отправки ---
+	contextID := CreateContextIDForPeers(fs.identityService.GetMyPeerID(), senderID)
+
+	// 1. Создаем и сериализуем FileControl
 	fileControlBytes, err := fs.protocolService.CreateFileControl_DownloadRequest(metadata.TransferId)
-	if err != nil {
+	if err != nil { /*...*/
 		return
 	}
 
-	// TODO: Заменить на реальное шифрование
-	ciphertext := fileControlBytes
-	nonce := []byte("dummy-nonce-files")
-	payloadType := fs.protocolService.GetPayloadType(&protocol.FileControl{})
+	// 2. Шифруем
+	encryptedMsg, err := fs.sessionService.EncryptForSession(contextID, fileControlBytes)
+	if err != nil { /*...*/
+		return
+	}
+
+	// 3. Упаковываем в SecureEnvelope с ПРАВИЛЬНЫМ типом
+	// ИЗМЕНЕНИЕ: Запрос - это управляющая команда для файлов.
+	payloadType := "encrypted/file-control-v1"
 	author := fs.identityService.GetMyIdentityPublicKeyProto()
-
-	envelopeBytes, err := fs.protocolService.CreateSecureEnvelope(author, payloadType, ciphertext, nonce)
-	if err != nil {
+	envelopeBytes, err := fs.protocolService.CreateSecureEnvelope(author, payloadType, encryptedMsg.Ciphertext, encryptedMsg.Nonce)
+	if err != nil { /*...*/
 		return
 	}
 
-	if err := fs.sender.SendSecureEnvelope(senderID, envelopeBytes); err != nil {
-		log.Printf("ERROR: [FileService] Не удалось отправить DownloadRequest: %v", err)
-		state.Status = "failed"
+	// 4. Отправляем
+	if err := fs.sender.SendSecureEnvelope(senderID, envelopeBytes); err != nil { /*...*/
 	}
 }
 
@@ -327,6 +338,13 @@ func (fs *FileService) streamFileToPeer(state *TransferState, recipientID string
 
 	var totalBytesSent int64 = 0
 	buffer := make([]byte, 64*1024)
+	contextID := CreateContextIDForPeers(fs.identityService.GetMyPeerID(), recipientID)
+
+	// 1. Получаем производный ключ для этого файла ОДИН РАЗ
+	fileKey, err := fs.sessionService.GetFileTransferKey(contextID, state.Metadata.TransferId)
+	if err != nil {
+		return
+	}
 
 	// Главный цикл отправки "окон"
 	for totalBytesSent < state.Metadata.SizeBytes {
@@ -351,8 +369,20 @@ func (fs *FileService) streamFileToPeer(state *TransferState, recipientID string
 				return
 			}
 
-			chunk := &protocol.FileData{TransferId: state.Metadata.TransferId, ChunkData: buffer[:n]}
-			if err := fs.sendChunk(streamID, chunk); err != nil {
+			// 2. Шифруем "кусок" с помощью производного ключа
+			encryptedChunk, err := fs.sessionService.EncryptWithKey(fileKey, buffer[:n])
+			if err != nil {
+				return
+			}
+
+			// 3. Упаковываем зашифрованные данные в FileData
+			chunkProto := &protocol.FileData{
+				TransferId: state.Metadata.TransferId,
+				Ciphertext: encryptedChunk.Ciphertext,
+				Nonce:      encryptedChunk.Nonce,
+			}
+
+			if err := fs.sendChunk(streamID, chunkProto); err != nil {
 				log.Printf("ERROR: [FileService SENDER] Ошибка отправки 'куска' для '%s': %v", state.Metadata.Filename, err)
 				state.Status = "failed"
 				return
@@ -436,30 +466,38 @@ func (fs *FileService) sendChunk(streamID uint64, chunk *protocol.FileData) erro
 	return fs.core.WriteToStream(streamID, data)
 }
 
-// processIncomingStream читает "куски" из "трубы", пишет их в файл и проверяет хеш.
+// processIncomingStream расшифровывает КАЖДЫЙ "кусок" файла.
 func (fs *FileService) processIncomingStream(state *TransferState, pipeReader *io.PipeReader, senderID string) {
 	defer pipeReader.Close()
+
+	contextID := CreateContextIDForPeers(fs.identityService.GetMyPeerID(), senderID)
+
+	// 1. Получаем производный ключ для этого файла ОДИН РАЗ
+	fileKey, err := fs.sessionService.GetFileTransferKey(contextID, state.Metadata.TransferId)
+	if err != nil {
+		log.Printf("ERROR: [FileService RECEIVER] Не удалось получить ключ для файла: %v", err)
+		state.Status = "failed"
+		return
+	}
 
 	homeDir, _ := os.UserHomeDir()
 	downloadsPath := filepath.Join(homeDir, "Downloads", "OwlWhisper")
 	os.MkdirAll(downloadsPath, 0755)
 	filePath := filepath.Join(downloadsPath, state.Metadata.Filename)
-
 	file, err := os.Create(filePath)
 	if err != nil {
 		log.Printf("ERROR: [FileService RECEIVER] Не удалось создать файл: %v", err)
 		state.Status = "failed"
 		return
 	}
+
 	var totalBytesReceived int64 = 0
 	var bytesSinceLastAck int64 = 0
 	streamReader := bufio.NewReader(pipeReader)
+
 	for {
 		msgLen, err := binary.ReadUvarint(streamReader)
 		if err != nil {
-			if err != io.EOF && err != io.ErrClosedPipe {
-				log.Printf("ERROR: [FileService RECEIVER] Ошибка чтения длины 'куска': %v", err)
-			}
 			break
 		}
 		if msgLen == 0 {
@@ -468,34 +506,49 @@ func (fs *FileService) processIncomingStream(state *TransferState, pipeReader *i
 
 		msgData := make([]byte, msgLen)
 		if _, err := io.ReadFull(streamReader, msgData); err != nil {
-			log.Printf("ERROR: [FileService RECEIVER] Ошибка чтения данных 'куска': %v", err)
 			break
 		}
 
-		chunk := &protocol.FileData{}
-		if err := proto.Unmarshal(msgData, chunk); err != nil {
-			log.Printf("WARN: [FileService RECEIVER] Ошибка Unmarshal 'куска': %v", err)
+		// ИЗМЕНЕНИЕ: Используем ProtocolService для парсинга
+		// БОЛЬШE НИКАКОГО proto.Unmarshal ЗДЕСЬ!
+		fileDataMsg, err := fs.protocolService.ParseFileData(msgData)
+		if err != nil {
+			log.Printf("WARN: [FileService RECEIVER] Ошибка парсинга FileData: %v", err)
 			continue
 		}
-		if chunk.IsLastChunk {
+
+		if fileDataMsg.IsLastChunk {
 			break
 		}
-		if _, err := file.Write(chunk.ChunkData); err != nil {
+
+		encryptedMsg := &encryption.EncryptedMessage{
+			Ciphertext: fileDataMsg.Ciphertext,
+			Nonce:      fileDataMsg.Nonce,
+		}
+
+		// Расшифровываем "кусок" с помощью производного ключа
+		plaintextChunk, err := fs.sessionService.DecryptWithKey(fileKey, encryptedMsg)
+		if err != nil {
+			log.Printf("WARN: [FileService RECEIVER] Ошибка расшифровки 'куска': %v", err)
+			continue
+		}
+
+		// Пишем в файл расшифрованные данные
+		if _, err := file.Write(plaintextChunk); err != nil {
 			log.Printf("ERROR: [FileService RECEIVER] Ошибка записи в файл: %v", err)
 			break
 		}
-		totalBytesReceived += int64(len(chunk.ChunkData))
-		bytesSinceLastAck += int64(len(chunk.ChunkData))
 
-		// 1. Проверяем, не пора ли отправить ACK
+		totalBytesReceived += int64(len(plaintextChunk))
+		bytesSinceLastAck += int64(len(plaintextChunk))
+
 		if bytesSinceLastAck >= fileTransferWindowSize {
 			log.Printf("INFO: [FileService RECEIVER] Получено %d MB, отправка ACK...", totalBytesReceived/1024/1024)
 			fs.sendAck(senderID, state.Metadata.TransferId, totalBytesReceived)
-			bytesSinceLastAck = 0 // Сбрасываем счетчик
+			bytesSinceLastAck = 0
 		}
 	}
 
-	// 2. Отправляем финальный ACK после завершения цикла
 	log.Printf("INFO: [FileService RECEIVER] Цикл завершен, отправка финального ACK на %d байт", totalBytesReceived)
 	fs.sendAck(senderID, state.Metadata.TransferId, totalBytesReceived)
 
@@ -551,23 +604,34 @@ func (fs *FileService) findTransferByStreamID(streamID uint64) (*TransferState, 
 	return nil, false
 }
 
+// sendAck шифрует и отправляет подтверждение о получении "окна" данных.
 func (fs *FileService) sendAck(recipientID, transferID string, offset int64) {
+	contextID := CreateContextIDForPeers(fs.identityService.GetMyPeerID(), recipientID)
+
+	// 1. Создаем и сериализуем FileControl с ACK
 	ackBytes, err := fs.protocolService.CreateFileControl_ChunkAck(transferID, offset)
 	if err != nil {
+		log.Printf("ERROR: [FileService] Ошибка создания ChunkAck: %v", err)
 		return
 	}
 
-	// TODO: Заменить на реальное шифрование
-	ciphertext := ackBytes
-	nonce := []byte("dummy-nonce-ack")
-	payloadType := fs.protocolService.GetPayloadType(&protocol.FileControl{})
-	author := fs.identityService.GetMyIdentityPublicKeyProto()
-	envelopeBytes, err := fs.protocolService.CreateSecureEnvelope(author, payloadType, ciphertext, nonce)
+	// 2. Шифруем его основным ключом сессии
+	encryptedMsg, err := fs.sessionService.EncryptForSession(contextID, ackBytes)
 	if err != nil {
+		log.Printf("ERROR: [FileService] Ошибка шифрования ChunkAck: %v", err)
 		return
 	}
 
-	// Отправляем ACK "тихо", в фоне.
+	// 3. Упаковываем в SecureEnvelope
+	payloadType := "encrypted/file-control-v1"
+	author := fs.identityService.GetMyIdentityPublicKeyProto()
+	envelopeBytes, err := fs.protocolService.CreateSecureEnvelope(author, payloadType, encryptedMsg.Ciphertext, encryptedMsg.Nonce)
+	if err != nil {
+		log.Printf("ERROR: [FileService] Ошибка создания SecureEnvelope для ChunkAck: %v", err)
+		return
+	}
+
+	// 4. Отправляем ACK "тихо", в фоне.
 	if err := fs.sender.SendSecureEnvelope(recipientID, envelopeBytes); err != nil {
 		log.Printf("WARN: [FileService] Не удалось отправить ACK для %s", transferID)
 	}
