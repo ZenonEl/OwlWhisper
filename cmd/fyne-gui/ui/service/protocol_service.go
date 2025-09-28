@@ -42,7 +42,7 @@ type IProtocolService interface {
 	CreateSignedCommand(author *protocol.IdentityPublicKey, commandData []byte, signature []byte) ([]byte, error)
 
 	// CreateCommand_InitiateContext создает внутреннюю команду для начала нового чата.
-	CreateCommand_InitiateContext(contextID string, seqNum uint64, initialMembers []*protocol.IdentityPublicKey, senderProfile *protocol.ProfilePayload) ([]byte, error)
+	CreateCommand_InitiateContext(contextID string, seqNum uint64, initialMembers []*protocol.IdentityPublicKey, senderProfile *protocol.ProfilePayload, ephemeralKey []byte, chosenSuite string) ([]byte, error)
 
 	// ParseSignedCommand разбирает внешний конверт команды.
 	// Не проверяет подпись, это задача CryptoService.
@@ -55,7 +55,7 @@ type IProtocolService interface {
 	CreateCommand_DiscloseProfile(contextID string, seqNum uint64, profile *protocol.ProfilePayload) ([]byte, error)
 	ParsePingEnvelope(data []byte) (*protocol.PingEnvelope, error)
 	// НОВЫЙ МЕТОД
-	CreateCommand_AcknowledgeContext(contextID string, seqNum uint64, senderProfile *protocol.ProfilePayload) ([]byte, error)
+	CreateCommand_AcknowledgeContext(contextID string, seqNum uint64, senderProfile *protocol.ProfilePayload, ephemeralKey []byte) ([]byte, error)
 
 	// --- НОВЫЕ МЕТОДЫ ДЛЯ FILE TRANSFER ---
 	CreateChatContent_FileMetadata(metadata *protocol.FileMetadata) ([]byte, error)
@@ -145,10 +145,12 @@ func (ps *protocolService) CreateSignedCommand(author *protocol.IdentityPublicKe
 	return proto.Marshal(signedCmd)
 }
 
-func (ps *protocolService) CreateCommand_InitiateContext(contextID string, seqNum uint64, initialMembers []*protocol.IdentityPublicKey, senderProfile *protocol.ProfilePayload) ([]byte, error) {
+func (ps *protocolService) CreateCommand_InitiateContext(contextID string, seqNum uint64, initialMembers []*protocol.IdentityPublicKey, senderProfile *protocol.ProfilePayload, ephemeralKey []byte, chosenSuite string) ([]byte, error) {
 	initiate := &protocol.InitiateContext{
-		InitialMembers: initialMembers,
-		SenderProfile:  senderProfile,
+		InitialMembers:     initialMembers,
+		SenderProfile:      senderProfile,
+		EphemeralPublicKey: ephemeralKey,
+		ChosenCryptoSuite:  chosenSuite,
 	}
 	cmd := &protocol.Command{
 		ContextId:      contextID,
@@ -209,9 +211,10 @@ func (ps *protocolService) ParsePingEnvelope(data []byte) (*protocol.PingEnvelop
 	return envelope, nil
 }
 
-func (ps *protocolService) CreateCommand_AcknowledgeContext(contextID string, seqNum uint64, senderProfile *protocol.ProfilePayload) ([]byte, error) {
+func (ps *protocolService) CreateCommand_AcknowledgeContext(contextID string, seqNum uint64, senderProfile *protocol.ProfilePayload, ephemeralKey []byte) ([]byte, error) {
 	ack := &protocol.AcknowledgeContext{
-		SenderProfile: senderProfile,
+		SenderProfile:      senderProfile,
+		EphemeralPublicKey: ephemeralKey,
 	}
 	cmd := &protocol.Command{
 		ContextId:      contextID,

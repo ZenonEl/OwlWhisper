@@ -17,6 +17,7 @@ import (
 	newcore "OwlWhisper/cmd/fyne-gui/new-core"
 	protocol "OwlWhisper/cmd/fyne-gui/new-core/protocol"
 	services "OwlWhisper/cmd/fyne-gui/ui/service"
+	"OwlWhisper/cmd/fyne-gui/ui/service/encryption"
 )
 
 // AppUI является корневым компонентом UI и реализует интерфейсы для сервисов.
@@ -80,9 +81,13 @@ func NewAppUI(core newcore.ICoreController, privKey crypto.PrivKey) *AppUI {
 	trustService := services.NewTrustService(coreCryptoModule)
 	ui.identityService = services.NewIdentityService(cryptoService, trustService)
 
+	// Создаем SessionService
+	cryptoEngine, _ := encryption.NewSimpleEcdhEngine()
+	sessionService := services.NewSessionService(cryptoEngine)
+
 	// Бизнес-сервисы
-	ui.contactService = services.NewContactService(core, messageSender, protocolService, cryptoService, ui.identityService, trustService, ui, ui.refreshContacts)
-	ui.chatService = services.NewChatService(messageSender, protocolService, ui.identityService, ui.contactService.Provider, ui.onNewChatMessage)
+	ui.contactService = services.NewContactService(core, messageSender, protocolService, cryptoService, ui.identityService, trustService, sessionService, ui, ui.refreshContacts)
+	ui.chatService = services.NewChatService(messageSender, protocolService, ui.identityService, sessionService, ui.contactService.Provider, ui.onNewChatMessage)
 	ui.fileService = services.NewFileService(core, messageSender, protocolService, ui.identityService, ui)
 	ui.callService, err = services.NewCallService(messageSender, protocolService, ui.OnIncomingCall)
 
