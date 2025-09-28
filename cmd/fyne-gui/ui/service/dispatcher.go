@@ -115,26 +115,17 @@ func (d *MessageDispatcher) handlePingEnvelope(senderID string, ping *protocol.P
 
 // handleSecureEnvelope расшифровывает (пока заглушка) и маршрутизирует конфиденциальные данные.
 func (d *MessageDispatcher) handleSecureEnvelope(senderID string, envelope *protocol.SecureEnvelope) {
-	// !!! ЗАГЛУШКА ДЛЯ РАСШИФРОВКИ !!!
-	plaintext := envelope.Ciphertext
 	log.Printf("DEBUG [Dispatcher]: Обработка SecureEnvelope. PayloadType: '%s'", envelope.PayloadType)
 
+	// Используем switch, чтобы направить "конверт" в нужный сервис для расшифровки.
 	switch envelope.PayloadType {
-	case "protocol.ChatContent":
-		content, err := d.protocolService.ParseChatContent(plaintext)
-		if err != nil {
-			log.Printf("WARN: [Dispatcher] Ошибка парсинга ChatContent от %s: %v", senderID, err)
-			return
-		}
-		d.handleChatContent(senderID, content)
+	case "encrypted/chat-v1":
+		d.chatService.HandleEncryptedMessage(senderID, envelope)
 
-	case "protocol.FileControl":
-		content, err := d.protocolService.ParseFileControl(plaintext)
-		if err != nil {
-			log.Printf("WARN: [Dispatcher] Ошибка парсинга FileControl от %s: %v", senderID, err)
-			return
-		}
-		d.handleFileControl(senderID, content)
+	case "encrypted/file-control-v1":
+		// TODO: Когда добавим шифрование в FileService, вызов будет здесь
+		// d.fileService.HandleEncryptedFileControl(senderID, envelope)
+		log.Printf("WARN: [Dispatcher] Получен зашифрованный FileControl, но обработчик еще не реализован.")
 
 	default:
 		log.Printf("WARN: [Dispatcher] Получен SecureEnvelope с неизвестным PayloadType '%s' от %s", envelope.PayloadType, senderID)

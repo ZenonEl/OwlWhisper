@@ -105,6 +105,7 @@ type ContactService struct {
 	sender          IMessageSender
 	protocolService IProtocolService
 	cryptoService   ICryptoService
+	sessionService  ISessionService
 	identityService IIdentityService
 	trustService    ITrustService
 	cancelAnnounce  context.CancelFunc
@@ -112,9 +113,9 @@ type ContactService struct {
 
 	// --- Внутреннее состояние ---
 	Provider             ContactProvider
-	onUpdate             func()                             // Callback для обновления списка контактов в UI
-	pendingVerifications map[string]*pendingVerification    // Ключ: PeerID
-	pendingInvitations   map[string]*protocol.SignedCommand // Ключ: PeerID отправителя
+	onUpdate             func()                          // Callback для обновления списка контактов в UI
+	pendingVerifications map[string]*pendingVerification // Ключ: PeerID
+	pendingInvitations   map[string]*pendingInvitation
 	mu                   sync.RWMutex
 }
 
@@ -125,6 +126,11 @@ type pendingVerification struct {
 	profile   *protocol.ProfilePayload
 }
 
+type pendingInvitation struct {
+	originalCmd          *protocol.SignedCommand
+	responseEphemeralKey []byte
+}
+
 // NewContactService - конструктор для ContactService.
 func NewContactService(
 	core newcore.ICoreController,
@@ -133,6 +139,7 @@ func NewContactService(
 	cryptoSvc ICryptoService,
 	idSvc IIdentityService,
 	trustSvc ITrustService,
+	sessionSvc ISessionService,
 	uiManager ContactUIManager,
 	onUpdate func(),
 ) *ContactService {
@@ -143,11 +150,12 @@ func NewContactService(
 		cryptoService:        cryptoSvc,
 		identityService:      idSvc,
 		trustService:         trustSvc,
+		sessionService:       sessionSvc,
 		uiManager:            uiManager,
 		Provider:             NewInMemoryContactProvider(),
 		onUpdate:             onUpdate,
 		pendingVerifications: make(map[string]*pendingVerification),
-		pendingInvitations:   make(map[string]*protocol.SignedCommand),
+		pendingInvitations:   make(map[string]*pendingInvitation),
 	}
 
 	return cs
@@ -210,7 +218,7 @@ func (cs *ContactService) InitiateNewChatFromProfile(recipientPeerID string) {
 // AcceptChatInvitation вызывается UI, когда пользователь принимает запрос на дружбу.
 func (cs *ContactService) AcceptChatInvitation(senderPeerID string) {
 	cs.mu.Lock()
-	originalCmd, ok := cs.pendingInvitations[senderPeerID]
+	pending, ok := cs.pendingInvitations[senderPeerID]
 	if !ok {
 		cs.mu.Unlock()
 		log.Printf("ERROR: [ContactService] Не найдено исходное приглашение от %s", senderPeerID)
@@ -220,10 +228,9 @@ func (cs *ContactService) AcceptChatInvitation(senderPeerID string) {
 	cs.mu.Unlock()
 
 	// 1. Отправляем ответную команду `AcknowledgeContext`
-	go cs.sendAcknowledgeContext(senderPeerID, originalCmd)
+	go cs.sendAcknowledgeContext(senderPeerID, pending.originalCmd, pending.responseEphemeralKey)
 
-	// 2. Добавляем контакт в нашу базу немедленно
-	senderProfile, err := cs.extractProfileFromCmd(originalCmd)
+	senderProfile, err := cs.extractProfileFromCmd(pending.originalCmd)
 	if err != nil {
 		log.Printf("ERROR: [ContactService] Не удалось извлечь профиль из команды: %v", err)
 		return
@@ -287,29 +294,32 @@ func (cs *ContactService) HandleDiscloseProfile(senderID string, cmd *protocol.S
 
 // HandleInitiateContext обрабатывает входящий запрос на добавление в контакты.
 func (cs *ContactService) HandleInitiateContext(senderID string, cmd *protocol.SignedCommand, payload *protocol.InitiateContext) {
-	log.Printf("INFO: [ContactService] Получен InitiateContext от %s", senderID)
-
 	isValid, err := cs.trustService.VerifySignature(cmd)
 	if err != nil || !isValid {
-		log.Printf("WARN: [ContactService] ПРОВАЛ ВЕРИФИКАЦИИ InitiateContext от %s. Error: %v", senderID, err)
+		return
+	}
+	if payload.ChosenCryptoSuite != "simple_ecdh_v1" {
 		return
 	}
 
-	status := cs.trustService.GetVerificationStatus(cmd.AuthorIdentity.PublicKey)
-	fingerprint := cs.trustService.GenerateFingerprint(cmd.AuthorIdentity.PublicKey)
+	innerCmd, _ := cs.protocolService.ParseCommand(cmd.CommandData)
+	contextID := innerCmd.ContextId
 
-	// ИСПРАВЛЕНО: Теперь профиль находится прямо в payload
-	senderProfile := payload.SenderProfile
-	if senderProfile == nil {
-		log.Printf("ERROR: [ContactService] InitiateContext от %s пришел без профиля.", senderID)
+	ownEphemeralPublicKey, err := cs.sessionService.ActivateSessionFromRecipient(contextID, payload.EphemeralPublicKey)
+	if err != nil {
 		return
 	}
 
 	cs.mu.Lock()
-	cs.pendingInvitations[senderID] = cmd
+	cs.pendingInvitations[senderID] = &pendingInvitation{
+		originalCmd:          cmd,
+		responseEphemeralKey: ownEphemeralPublicKey,
+	}
 	cs.mu.Unlock()
 
-	cs.uiManager.OnContactRequestReceived(senderID, senderProfile, fingerprint, status)
+	status := cs.trustService.GetVerificationStatus(cmd.AuthorIdentity.PublicKey)
+	fingerprint := cs.trustService.GenerateFingerprint(cmd.AuthorIdentity.PublicKey)
+	cs.uiManager.OnContactRequestReceived(senderID, payload.SenderProfile, fingerprint, status)
 }
 
 func (cs *ContactService) HandleAcknowledgeContext(senderID string, cmd *protocol.SignedCommand, payload *protocol.AcknowledgeContext) {
@@ -318,6 +328,16 @@ func (cs *ContactService) HandleAcknowledgeContext(senderID string, cmd *protoco
 	isValid, err := cs.trustService.VerifySignature(cmd)
 	if err != nil || !isValid {
 		log.Printf("WARN: [ContactService] ПРОВАЛ ВЕРИФИКАЦИИ AcknowledgeContext от %s. Error: %v", senderID, err)
+		return
+	}
+
+	innerCmd, _ := cs.protocolService.ParseCommand(cmd.CommandData)
+	contextID := innerCmd.ContextId
+
+	// Завершаем рукопожатие со стороны инициатора.
+	err = cs.sessionService.ActivateSessionFromInitiator(contextID, payload.EphemeralPublicKey)
+	if err != nil {
+		log.Printf("ERROR: [ContactService] Не удалось активировать сессию (инициатор): %v", err)
 		return
 	}
 
@@ -458,15 +478,13 @@ func (cs *ContactService) sendDiscloseProfileResponse(recipientID string) error 
 	return cs.sender.SendSignedCommand(recipientID, signedCmdBytes)
 }
 
-func (cs *ContactService) sendAcknowledgeContext(recipientPeerID string, originalCmd *protocol.SignedCommand) error {
+func (cs *ContactService) sendAcknowledgeContext(recipientID string, originalCmd *protocol.SignedCommand, ownEphemeralKey []byte) error {
 	innerOriginalCmd, _ := cs.protocolService.ParseCommand(originalCmd.CommandData)
 	contextID := innerOriginalCmd.ContextId
-
 	myProfilePayload := cs.identityService.GetMyProfilePayload()
+	myIdentityProto := cs.identityService.GetMyIdentityPublicKeyProto()
 
-	// Наша ответная команда должна иметь тот же sequence_number, что и у инициатора,
-	// чтобы показать, что мы отвечаем на его первое действие.
-	commandData, err := cs.protocolService.CreateCommand_AcknowledgeContext(contextID, 1, myProfilePayload)
+	commandData, err := cs.protocolService.CreateCommand_AcknowledgeContext(contextID, 1, myProfilePayload, ownEphemeralKey)
 	if err != nil {
 		return err
 	}
@@ -476,33 +494,37 @@ func (cs *ContactService) sendAcknowledgeContext(recipientPeerID string, origina
 		return err
 	}
 
-	signedCmd, err := cs.protocolService.CreateSignedCommand(
-		cs.identityService.GetMyIdentityPublicKeyProto(),
-		commandData,
-		signature,
-	)
+	signedCmdBytes, err := cs.protocolService.CreateSignedCommand(myIdentityProto, commandData, signature)
 	if err != nil {
 		return err
 	}
 
-	log.Printf("INFO: [ContactService] Отправка AcknowledgeContext пиру %s", recipientPeerID)
-	return cs.sender.SendSignedCommand(recipientPeerID, signedCmd)
+	log.Printf("INFO: [ContactService] Отправка AcknowledgeContext пиру %s", recipientID)
+	return cs.sender.SendSignedCommand(recipientID, signedCmdBytes)
 }
 
 // sendInitiateContext отправляет формальный запрос на добавление в контакты.
 func (cs *ContactService) sendInitiateContext(recipientPeerID string, recipientPublicKey []byte, recipientProfile *protocol.ProfilePayload) error {
+	chosenSuite := "simple_ecdh_v1"
+	// ИСПРАВЛЕНО: Используем детерминированный contextID
+	contextID := CreateContextIDForPeers(cs.identityService.GetMyPeerID(), recipientPeerID)
+
+	ephemeralPublicKey, err := cs.sessionService.PrepareNewSession(contextID)
+	if err != nil {
+		return err
+	}
+
+	myProfilePayload := cs.identityService.GetMyProfilePayload()
 	myIdentityProto := cs.identityService.GetMyIdentityPublicKeyProto()
 	recipientIdentityProto := &protocol.IdentityPublicKey{
 		KeyType:   protocol.KeyType_ED25519,
 		PublicKey: recipientPublicKey,
 	}
 
-	// TODO: Реализовать детерминированный contextID
-	contextID := fmt.Sprintf("chat-%s", time.Now().UnixNano())
-
-	// ИСПРАВЛЕНО: Добавляем свой ProfilePayload
-	myProfilePayload := cs.identityService.GetMyProfilePayload()
-	commandData, err := cs.protocolService.CreateCommand_InitiateContext(contextID, 1, []*protocol.IdentityPublicKey{myIdentityProto, recipientIdentityProto}, myProfilePayload)
+	commandData, err := cs.protocolService.CreateCommand_InitiateContext(
+		contextID, 1, []*protocol.IdentityPublicKey{myIdentityProto, recipientIdentityProto},
+		myProfilePayload, ephemeralPublicKey, chosenSuite,
+	)
 	if err != nil {
 		return err
 	}
