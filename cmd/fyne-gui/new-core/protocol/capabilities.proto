@@ -1,0 +1,54 @@
+// Путь: cmd/fyne-gui/new-core/protocol/capabilities.proto
+syntax = "proto3";
+
+package protocol;
+
+option go_package = "./";
+
+// FeatureSpec описывает одну конкретную возможность или протокол,
+// поддерживаемый клиентом.
+message FeatureSpec {
+    // Уникальный, человеко-читаемый идентификатор функции.
+    // Рекомендуемый формат: "домен/версия/специфика".
+    //
+    // Примеры:
+    // "crypto/v1/simple-ecdh"
+    // "chat/v1/text-protobuf"
+    // "chat/v2/replies"
+    // "files/v1/ack-protocol"
+    // "files/v2/sliding-window"
+    // "calls/v1/webtc-audio"
+    // "libp2p/protocol/chat/1.0.0"
+    string id = 1;
+
+    // Опциональные, специфичные для функции параметры в формате JSON.
+    // Позволяет согласовывать детали, не меняя протокол.
+    //
+    // Пример для "files/v1/ack-protocol":
+    // `{"supported_window_sizes_mb": [16, 32, 64]}`
+    //
+    // Пример для "calls/v1/webrtc-audio":
+    // `{"supported_codecs": ["opus", "g722"]}`
+    string params = 2;
+}
+
+// Capabilities описывает полный набор возможностей и поддерживаемых
+// протоколов клиента. Эта структура передается при знакомстве.
+message Capabilities {
+    // --- Информация о клиенте ---
+    
+    // Имя клиентского ПО.
+    // Пример: "OwlWhisper Desktop", "PineappleWhisper Mobile"
+    string client_name = 1;
+    
+    // Версия клиентского ПО. Рекомендуется использовать SemVer.
+    // Пример: "0.1.0-alpha", "1.2.3"
+    string client_version = 2;
+
+    // --- Список возможностей ---
+
+    // Список всех функций и протоколов, которые поддерживает клиент.
+    // Клиент, получающий этот список, должен игнорировать
+    // неизвестные ему FeatureSpec.
+    repeated FeatureSpec features = 10;
+}

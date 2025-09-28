@@ -305,9 +305,10 @@ func (x *FileChunkAck) GetAcknowledgedOffset() int64 {
 type FileData struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TransferId    string                 `protobuf:"bytes,1,opt,name=transfer_id,json=transferId,proto3" json:"transfer_id,omitempty"`       // ID передачи, к которой относится этот кусок
-	ChunkData     []byte                 `protobuf:"bytes,2,opt,name=chunk_data,json=chunkData,proto3" json:"chunk_data,omitempty"`          // Сами байты "куска" файла
-	Offset        int64                  `protobuf:"varint,3,opt,name=offset,proto3" json:"offset,omitempty"`                                // Смещение этого "куска" от начала файла
-	IsLastChunk   bool                   `protobuf:"varint,4,opt,name=is_last_chunk,json=isLastChunk,proto3" json:"is_last_chunk,omitempty"` // Флаг, что это последний "кусок"
+	Ciphertext    []byte                 `protobuf:"bytes,2,opt,name=ciphertext,proto3" json:"ciphertext,omitempty"`                         // Зашифрованные байты "куска" файла
+	Nonce         []byte                 `protobuf:"bytes,3,opt,name=nonce,proto3" json:"nonce,omitempty"`                                   // Nonce, использованный для шифрования этого "куска"
+	Offset        int64                  `protobuf:"varint,4,opt,name=offset,proto3" json:"offset,omitempty"`                                // Смещение этого "куска" от начала файла
+	IsLastChunk   bool                   `protobuf:"varint,5,opt,name=is_last_chunk,json=isLastChunk,proto3" json:"is_last_chunk,omitempty"` // Флаг, что это последний "кусок"
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -349,9 +350,16 @@ func (x *FileData) GetTransferId() string {
 	return ""
 }
 
-func (x *FileData) GetChunkData() []byte {
+func (x *FileData) GetCiphertext() []byte {
 	if x != nil {
-		return x.ChunkData
+		return x.Ciphertext
+	}
+	return nil
+}
+
+func (x *FileData) GetNonce() []byte {
+	if x != nil {
+		return x.Nonce
 	}
 	return nil
 }
@@ -495,14 +503,16 @@ const file_file_transfer_proto_rawDesc = "" +
 	"\fFileChunkAck\x12\x1f\n" +
 	"\vtransfer_id\x18\x01 \x01(\tR\n" +
 	"transferId\x12/\n" +
-	"\x13acknowledged_offset\x18\x02 \x01(\x03R\x12acknowledgedOffset\"\x86\x01\n" +
+	"\x13acknowledged_offset\x18\x02 \x01(\x03R\x12acknowledgedOffset\"\x9d\x01\n" +
 	"\bFileData\x12\x1f\n" +
 	"\vtransfer_id\x18\x01 \x01(\tR\n" +
-	"transferId\x12\x1d\n" +
+	"transferId\x12\x1e\n" +
 	"\n" +
-	"chunk_data\x18\x02 \x01(\fR\tchunkData\x12\x16\n" +
-	"\x06offset\x18\x03 \x01(\x03R\x06offset\x12\"\n" +
-	"\ris_last_chunk\x18\x04 \x01(\bR\visLastChunk\"\x8c\x02\n" +
+	"ciphertext\x18\x02 \x01(\fR\n" +
+	"ciphertext\x12\x14\n" +
+	"\x05nonce\x18\x03 \x01(\fR\x05nonce\x12\x16\n" +
+	"\x06offset\x18\x04 \x01(\x03R\x06offset\x12\"\n" +
+	"\ris_last_chunk\x18\x05 \x01(\bR\visLastChunk\"\x8c\x02\n" +
 	"\x12FileTransferStatus\x12\x1f\n" +
 	"\vtransfer_id\x18\x01 \x01(\tR\n" +
 	"transferId\x12;\n" +
