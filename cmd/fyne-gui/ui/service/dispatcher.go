@@ -6,21 +6,24 @@ import (
 
 	newcore "OwlWhisper/cmd/fyne-gui/new-core"
 	protocol "OwlWhisper/cmd/fyne-gui/new-core/protocol"
+	encryption "OwlWhisper/cmd/fyne-gui/ui/service/encryption"
 )
 
 // MessageDispatcher десериализует и маршрутизирует входящие сообщения.
 type MessageDispatcher struct {
 	protocolService IProtocolService
 	contactService  *ContactService
+	sessionService  ISessionService
 	chatService     *ChatService
 	fileService     *FileService
 	callService     *CallService
 }
 
 // Конструктор остается прежним
-func NewMessageDispatcher(protoSvc IProtocolService, cs *ContactService, chs *ChatService, fs *FileService, cls *CallService) *MessageDispatcher {
+func NewMessageDispatcher(protoSvc IProtocolService, sessionSvc ISessionService, cs *ContactService, chs *ChatService, fs *FileService, cls *CallService) *MessageDispatcher {
 	return &MessageDispatcher{
 		protocolService: protoSvc,
+		sessionService:  sessionSvc,
 		contactService:  cs,
 		chatService:     chs,
 		fileService:     fs,
@@ -113,22 +116,46 @@ func (d *MessageDispatcher) handlePingEnvelope(senderID string, ping *protocol.P
 	}
 }
 
-// handleSecureEnvelope расшифровывает (пока заглушка) и маршрутизирует конфиденциальные данные.
+// handleSecureEnvelope расшифровывает и маршрутизирует конфиденциальные данные.
 func (d *MessageDispatcher) handleSecureEnvelope(senderID string, envelope *protocol.SecureEnvelope) {
 	log.Printf("DEBUG [Dispatcher]: Обработка SecureEnvelope. PayloadType: '%s'", envelope.PayloadType)
+	contextID := CreateContextIDForPeers(d.contactService.identityService.GetMyPeerID(), senderID)
 
-	// Используем switch, чтобы направить "конверт" в нужный сервис для расшифровки.
+	encryptedMsg := &encryption.EncryptedMessage{
+		Ciphertext: envelope.Ciphertext,
+		Nonce:      envelope.Nonce,
+	}
+
+	// 1. Централизованно расшифровываем сообщение
+	plaintextBytes, err := d.sessionService.DecryptForSession(contextID, encryptedMsg)
+	if err != nil {
+		log.Printf("WARN: [Dispatcher] Не удалось расшифровать SecureEnvelope от %s: %v", senderID, err)
+		return
+	}
+	if plaintextBytes == nil {
+		return
+	} // Сообщение в очереди
+
+	// 2. Используем PayloadType для однозначной маршрутизации
 	switch envelope.PayloadType {
 	case "encrypted/chat-v1":
-		d.chatService.HandleEncryptedMessage(senderID, envelope)
+		// Это точно содержимое чата (текст или анонс файла)
+		if chatContent, err := d.protocolService.ParseChatContent(plaintextBytes); err == nil {
+			d.handleChatContent(senderID, chatContent)
+		} else {
+			log.Printf("WARN: [Dispatcher] Ошибка парсинга ChatContent: %v", err)
+		}
 
 	case "encrypted/file-control-v1":
-		// TODO: Когда добавим шифрование в FileService, вызов будет здесь
-		// d.fileService.HandleEncryptedFileControl(senderID, envelope)
-		log.Printf("WARN: [Dispatcher] Получен зашифрованный FileControl, но обработчик еще не реализован.")
+		// Это точно управляющая команда для файлов (запрос или ACK)
+		if fileControl, err := d.protocolService.ParseFileControl(plaintextBytes); err == nil {
+			d.handleFileControl(senderID, fileControl)
+		} else {
+			log.Printf("WARN: [Dispatcher] Ошибка парсинга FileControl: %v", err)
+		}
 
 	default:
-		log.Printf("WARN: [Dispatcher] Получен SecureEnvelope с неизвестным PayloadType '%s' от %s", envelope.PayloadType, senderID)
+		log.Printf("WARN: [Dispatcher] Получен SecureEnvelope с неизвестным PayloadType '%s'", envelope.PayloadType)
 	}
 }
 
@@ -137,12 +164,13 @@ func (d *MessageDispatcher) handleChatContent(senderID string, content *protocol
 	switch payload := content.Payload.(type) {
 	case *protocol.ChatContent_Text:
 		d.chatService.ProcessTextMessage(senderID, payload.Text)
+
 	case *protocol.ChatContent_File:
+		// Вызываем FileService, чтобы он создал виджет, и передаем виджет в ChatService
 		card, err := d.fileService.HandleFileAnnouncement(senderID, payload.File)
 		if err == nil && card != nil {
 			d.chatService.ProcessWidgetMessage(card)
 		}
-		// ... другие типы содержимого чата ...
 	}
 }
 

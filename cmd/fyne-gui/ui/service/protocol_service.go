@@ -67,6 +67,7 @@ type IProtocolService interface {
 	CreateSignaling_Hangup(callID string, reason protocol.CallHangup_Reason) ([]byte, error)
 
 	CreateFileControl_ChunkAck(transferID string, offset int64) ([]byte, error)
+	ParseFileData(data []byte) (*protocol.FileData, error)
 }
 
 // protocolService - конкретная реализация IProtocolService.
@@ -284,4 +285,12 @@ func (ps *protocolService) CreateFileControl_ChunkAck(transferID string, offset 
 		Payload: &protocol.FileControl_Ack{Ack: ack},
 	}
 	return proto.Marshal(control)
+}
+
+func (ps *protocolService) ParseFileData(data []byte) (*protocol.FileData, error) {
+	fileData := &protocol.FileData{}
+	if err := proto.Unmarshal(data, fileData); err != nil {
+		return nil, fmt.Errorf("ошибка десериализации FileData: %w", err)
+	}
+	return fileData, nil
 }

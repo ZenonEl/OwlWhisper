@@ -2,11 +2,15 @@
 package services
 
 import (
+	"crypto/sha256"
 	"fmt"
+	"io"
 	"log"
 	"sync"
 
 	encryption "OwlWhisper/cmd/fyne-gui/ui/service/encryption"
+
+	"golang.org/x/crypto/hkdf"
 )
 
 // SessionStateEnum определяет возможное состояние сессии.
@@ -27,17 +31,21 @@ type SessionState struct {
 
 // ISessionService определяет интерфейс для управления E2EE-сессиями.
 type ISessionService interface {
-	// PrepareNewSession вызывается инициатором чата.
+	// --- Управление Сессиями ---
 	PrepareNewSession(contextID string) (ephemeralPublicKey []byte, err error)
-
-	// ActivateSessionFromInitiator вызывается у инициатора после получения ответа.
 	ActivateSessionFromInitiator(contextID string, peerEphemeralKey []byte) error
-
-	// ActivateSessionFromRecipient вызывается у получателя при получении первого сообщения.
 	ActivateSessionFromRecipient(contextID string, peerEphemeralKey []byte) (ephemeralPublicKey []byte, err error)
 
+	// --- Работа с Основным Ключом Сессии ---
 	EncryptForSession(contextID string, plaintext []byte) (*encryption.EncryptedMessage, error)
 	DecryptForSession(contextID string, encryptedMsg *encryption.EncryptedMessage) ([]byte, error)
+
+	// --- Генерация Производных Ключей ---
+	GetFileTransferKey(contextID, transferID string) ([]byte, error)
+
+	// --- Общие Крипто-Операции ---
+	EncryptWithKey(key, plaintext []byte) (*encryption.EncryptedMessage, error)
+	DecryptWithKey(key []byte, encryptedMsg *encryption.EncryptedMessage) ([]byte, error)
 }
 
 // sessionService - конкретная реализация ISessionService.
@@ -134,12 +142,10 @@ func (s *sessionService) EncryptForSession(contextID string, plaintext []byte) (
 	s.mu.RLock()
 	state, ok := s.sessions[contextID]
 	s.mu.RUnlock()
-
 	if !ok || state.State != StateActive {
 		return nil, fmt.Errorf("сессия для contextID %s не активна", contextID)
 	}
-
-	return s.engine.Encrypt(state.SessionKey, plaintext)
+	return s.EncryptWithKey(state.SessionKey, plaintext)
 }
 
 // DecryptForSession расшифровывает сообщение или ставит его в очередь.
@@ -162,10 +168,37 @@ func (s *sessionService) DecryptForSession(contextID string, encryptedMsg *encry
 	}
 
 	if state.State == StateActive {
-		return s.engine.Decrypt(state.SessionKey, encryptedMsg)
+		return s.DecryptWithKey(state.SessionKey, encryptedMsg)
+	}
+	return nil, fmt.Errorf("сессия в неизвестном состоянии: %s", state.State)
+}
+
+func (s *sessionService) GetFileTransferKey(contextID, transferID string) ([]byte, error) {
+	s.mu.RLock()
+	state, ok := s.sessions[contextID]
+	s.mu.RUnlock()
+	if !ok || state.State != StateActive {
+		return nil, fmt.Errorf("сессия для contextID %s не активна, невозможно создать ключ файла", contextID)
 	}
 
-	return nil, fmt.Errorf("сессия в неизвестном состоянии: %s", state.State)
+	// Используем HKDF для создания детерминированного ключа
+	salt := []byte("owl-whisper-file-transfer-salt")
+	info := []byte(transferID)
+
+	kdf := hkdf.New(sha256.New, state.SessionKey, salt, info)
+	fileKey := make([]byte, 32) // 32 байта для AES-256
+	if _, err := io.ReadFull(kdf, fileKey); err != nil {
+		return nil, fmt.Errorf("ошибка генерации дочернего ключа (KDF): %w", err)
+	}
+	return fileKey, nil
+}
+
+func (s *sessionService) EncryptWithKey(key, plaintext []byte) (*encryption.EncryptedMessage, error) {
+	return s.engine.Encrypt(key, plaintext)
+}
+
+func (s *sessionService) DecryptWithKey(key []byte, encryptedMsg *encryption.EncryptedMessage) ([]byte, error) {
+	return s.engine.Decrypt(key, encryptedMsg)
 }
 
 // processPendingMessages обрабатывает очередь сообщений после активации сессии.
