@@ -317,10 +317,12 @@ type InitiateContext struct {
 	InitialMembers []*IdentityPublicKey `protobuf:"bytes,1,rep,name=initial_members,json=initialMembers,proto3" json:"initial_members,omitempty"`
 	// Политика чата (например, "только админы могут добавлять участников").
 	// Можно определить позже.
-	Policy        []byte          `protobuf:"bytes,2,opt,name=policy,proto3" json:"policy,omitempty"`
-	SenderProfile *ProfilePayload `protobuf:"bytes,3,opt,name=sender_profile,json=senderProfile,proto3" json:"sender_profile,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Policy             []byte          `protobuf:"bytes,2,opt,name=policy,proto3" json:"policy,omitempty"`
+	SenderProfile      *ProfilePayload `protobuf:"bytes,3,opt,name=sender_profile,json=senderProfile,proto3" json:"sender_profile,omitempty"`
+	EphemeralPublicKey []byte          `protobuf:"bytes,4,opt,name=ephemeral_public_key,json=ephemeralPublicKey,proto3" json:"ephemeral_public_key,omitempty"`
+	ChosenCryptoSuite  string          `protobuf:"bytes,5,opt,name=chosen_crypto_suite,json=chosenCryptoSuite,proto3" json:"chosen_crypto_suite,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *InitiateContext) Reset() {
@@ -374,14 +376,29 @@ func (x *InitiateContext) GetSenderProfile() *ProfilePayload {
 	return nil
 }
 
+func (x *InitiateContext) GetEphemeralPublicKey() []byte {
+	if x != nil {
+		return x.EphemeralPublicKey
+	}
+	return nil
+}
+
+func (x *InitiateContext) GetChosenCryptoSuite() string {
+	if x != nil {
+		return x.ChosenCryptoSuite
+	}
+	return ""
+}
+
 // AcknowledgeContext - это ответная команда для подтверждения участия
 // в новом контексте (чате).
 type AcknowledgeContext struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Профиль отвечающего, чтобы инициатор мог его сохранить.
-	SenderProfile *ProfilePayload `protobuf:"bytes,1,opt,name=sender_profile,json=senderProfile,proto3" json:"sender_profile,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	SenderProfile      *ProfilePayload `protobuf:"bytes,1,opt,name=sender_profile,json=senderProfile,proto3" json:"sender_profile,omitempty"`
+	EphemeralPublicKey []byte          `protobuf:"bytes,2,opt,name=ephemeral_public_key,json=ephemeralPublicKey,proto3" json:"ephemeral_public_key,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *AcknowledgeContext) Reset() {
@@ -417,6 +434,13 @@ func (*AcknowledgeContext) Descriptor() ([]byte, []int) {
 func (x *AcknowledgeContext) GetSenderProfile() *ProfilePayload {
 	if x != nil {
 		return x.SenderProfile
+	}
+	return nil
+}
+
+func (x *AcknowledgeContext) GetEphemeralPublicKey() []byte {
+	if x != nil {
+		return x.EphemeralPublicKey
 	}
 	return nil
 }
@@ -579,13 +603,16 @@ const file_command_proto_rawDesc = "" +
 	"addMembers\x12@\n" +
 	"\x0eremove_members\x18\x15 \x01(\v2\x17.protocol.RemoveMembersH\x00R\rremoveMembers\x12@\n" +
 	"\x0epromote_admins\x18\x16 \x01(\v2\x17.protocol.PromoteAdminsH\x00R\rpromoteAdminsB\t\n" +
-	"\apayload\"\xb0\x01\n" +
+	"\apayload\"\x92\x02\n" +
 	"\x0fInitiateContext\x12D\n" +
 	"\x0finitial_members\x18\x01 \x03(\v2\x1b.protocol.IdentityPublicKeyR\x0einitialMembers\x12\x16\n" +
 	"\x06policy\x18\x02 \x01(\fR\x06policy\x12?\n" +
-	"\x0esender_profile\x18\x03 \x01(\v2\x18.protocol.ProfilePayloadR\rsenderProfile\"U\n" +
+	"\x0esender_profile\x18\x03 \x01(\v2\x18.protocol.ProfilePayloadR\rsenderProfile\x120\n" +
+	"\x14ephemeral_public_key\x18\x04 \x01(\fR\x12ephemeralPublicKey\x12.\n" +
+	"\x13chosen_crypto_suite\x18\x05 \x01(\tR\x11chosenCryptoSuite\"\x87\x01\n" +
 	"\x12AcknowledgeContext\x12?\n" +
-	"\x0esender_profile\x18\x01 \x01(\v2\x18.protocol.ProfilePayloadR\rsenderProfile\"O\n" +
+	"\x0esender_profile\x18\x01 \x01(\v2\x18.protocol.ProfilePayloadR\rsenderProfile\x120\n" +
+	"\x14ephemeral_public_key\x18\x02 \x01(\fR\x12ephemeralPublicKey\"O\n" +
 	"\n" +
 	"AddMembers\x12A\n" +
 	"\x0emembers_to_add\x18\x01 \x03(\v2\x1b.protocol.IdentityPublicKeyR\fmembersToAdd\"X\n" +
