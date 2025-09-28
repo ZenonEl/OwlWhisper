@@ -65,6 +65,8 @@ message InitiateContext {
   // Можно определить позже.
   bytes policy = 2;
   ProfilePayload sender_profile = 3;
+  bytes ephemeral_public_key = 4;
+  string chosen_crypto_suite = 5; 
 }
 
 // AcknowledgeContext - это ответная команда для подтверждения участия
@@ -72,6 +74,7 @@ message InitiateContext {
 message AcknowledgeContext {
   // Профиль отвечающего, чтобы инициатор мог его сохранить.
   ProfilePayload sender_profile = 1;
+  bytes ephemeral_public_key = 2;
 }
 
 // AddMembers добавляет новых участников в существующий контекст (группу).

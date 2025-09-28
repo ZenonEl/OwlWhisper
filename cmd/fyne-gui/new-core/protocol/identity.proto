@@ -24,4 +24,5 @@ message ProfilePayload {
   // являются уникальными идентификаторами. Но можем оставить для красоты.
   string discriminator = 2;
   // В будущем: версия клиента, хэш аватара и т.д.
+  repeated string supported_crypto_suites = 3; 
 }

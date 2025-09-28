@@ -129,9 +129,11 @@ type ProfilePayload struct {
 	Nickname string                 `protobuf:"bytes,1,opt,name=nickname,proto3" json:"nickname,omitempty"`
 	// Дискриминатор нам больше не нужен, т.к. PeerID и PublicKey
 	// являются уникальными идентификаторами. Но можем оставить для красоты.
-	Discriminator string `protobuf:"bytes,2,opt,name=discriminator,proto3" json:"discriminator,omitempty"` // В будущем: версия клиента, хэш аватара и т.д.
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Discriminator string `protobuf:"bytes,2,opt,name=discriminator,proto3" json:"discriminator,omitempty"`
+	// В будущем: версия клиента, хэш аватара и т.д.
+	SupportedCryptoSuites []string `protobuf:"bytes,3,rep,name=supported_crypto_suites,json=supportedCryptoSuites,proto3" json:"supported_crypto_suites,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *ProfilePayload) Reset() {
@@ -178,6 +180,13 @@ func (x *ProfilePayload) GetDiscriminator() string {
 	return ""
 }
 
+func (x *ProfilePayload) GetSupportedCryptoSuites() []string {
+	if x != nil {
+		return x.SupportedCryptoSuites
+	}
+	return nil
+}
+
 var File_identity_proto protoreflect.FileDescriptor
 
 const file_identity_proto_rawDesc = "" +
@@ -186,10 +195,11 @@ const file_identity_proto_rawDesc = "" +
 	"\x11IdentityPublicKey\x12,\n" +
 	"\bkey_type\x18\x01 \x01(\x0e2\x11.protocol.KeyTypeR\akeyType\x12\x1d\n" +
 	"\n" +
-	"public_key\x18\x02 \x01(\fR\tpublicKey\"R\n" +
+	"public_key\x18\x02 \x01(\fR\tpublicKey\"\x8a\x01\n" +
 	"\x0eProfilePayload\x12\x1a\n" +
 	"\bnickname\x18\x01 \x01(\tR\bnickname\x12$\n" +
-	"\rdiscriminator\x18\x02 \x01(\tR\rdiscriminator*0\n" +
+	"\rdiscriminator\x18\x02 \x01(\tR\rdiscriminator\x126\n" +
+	"\x17supported_crypto_suites\x18\x03 \x03(\tR\x15supportedCryptoSuites*0\n" +
 	"\aKeyType\x12\x18\n" +
 	"\x14KEY_TYPE_UNSPECIFIED\x10\x00\x12\v\n" +
 	"\aED25519\x10\x01B\x04Z\x02./b\x06proto3"
