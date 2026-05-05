@@ -19,3 +19,6 @@
 
 # Go workspace file
 go.work
+
+# Compiled project binary (built at repo root)
+/owlwhisper
