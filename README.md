@@ -84,6 +84,10 @@ poc/                          earlier CLI exploration (superseded)
 - **The hard part is the threat model.** When the audience is genuinely at risk, *"looks secure"* is dangerous. Group E2E and metadata anonymity are specialized cryptographic engineering — they don't yield to general-purpose hard work.
 - **There's no shame in halting for the right reason.** A documented MVP that admits its gaps is more useful than a shipped product that lies about them.
 
+## On the code itself
+
+This is a halted MVP, not production code. For a candid self-review of the code-quality gaps I'm aware of — including the missing forward secrecy in the crypto layer, the absence of tests, and the architectural debt I'd address in a v2 — see [docs/STATUS.md](docs/STATUS.md).
+
 ## Could this be revived?
 
 Possibly, but only with:
