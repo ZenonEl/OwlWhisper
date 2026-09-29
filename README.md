@@ -10,7 +10,7 @@
 
 OwlWhisper is an attempt to build a peer-to-peer desktop messenger from scratch in Go — no central server, no operator who can read or hand over conversations. The work reached a near-complete MVP: peers discover each other over libp2p + Kademlia DHT, exchange typed protobuf messages, transfer files in chunked streams, and place WebRTC voice calls. 1:1 messages are encrypted with ECDH key agreement.
 
-The project is **halted** — not because the MVP didn't work, but because the gap between *"MVP works on my LAN"* and *"safe for the audience this was built for"* turned out to be funded-research wide. See [Why halted](#why-halted).
+The project is **halted** — not because the MVP didn't work, but because the gap between *"MVP works on my LAN"* and *"safe for the people who would rely on it"* turned out to be funded-research wide. See [Why halted](#why-halted).
 
 ## What got built
 
@@ -32,7 +32,7 @@ The CLI predecessor lives in [`poc/`](poc/) and is kept for historical reference
 
 ## Why halted
 
-The project was halted after I evaluated what would actually be required to make it useful for the audiences I had in mind — primarily independent / opposition-aligned communication channels in regions with active state-level network surveillance.
+The project was halted after I evaluated what it would actually take to make it safe for the use I had in mind: conversations between people who have a real reason to assume their network traffic is being watched.
 
 The MVP reached a working state. Two engineering walls beyond it turned out to be much higher than the early scope suggested:
 
@@ -42,7 +42,7 @@ The MVP reached a working state. Two engineering walls beyond it turned out to b
 
 ### 2. Traffic-pattern anonymity
 
-Even with perfect E2E, a peer-to-peer messenger leaks **who talks to whom and when**. For state-level adversaries doing traffic correlation, the metadata graph is enough to identify participants of an opposition channel. Defending against this is its own discipline — onion routing, mixnets, traffic padding, cover traffic.
+Even with perfect E2E, a peer-to-peer messenger leaks **who talks to whom and when**. For an adversary able to observe traffic at scale and correlate it, the metadata graph alone is enough to identify who belongs to a conversation. Defending against this is its own discipline — onion routing, mixnets, traffic padding, cover traffic.
 
 I specifically explored layering the libp2p transport over Tor (so the peer behind a given peer ID would be harder to deanonymize), but the integration complexity, the performance hit on a latency-sensitive UX, and the fact that Tor alone doesn't fully neutralize traffic-pattern correlation made it the wrong tradeoff to ship as a "secure" messenger.
 
@@ -81,7 +81,7 @@ poc/                          earlier CLI exploration (superseded)
 ## Lessons / Reflections
 
 - **An MVP is achievable solo.** A self-taught dev can ship a working P2P transport + GUI + 1:1 crypto + voice calls in a reasonable timeline. That part is just engineering and persistence.
-- **The hard part is the threat model.** When the audience is genuinely at risk, *"looks secure"* is dangerous. Group E2E and metadata anonymity are specialized cryptographic engineering — they don't yield to general-purpose hard work.
+- **The hard part is the threat model.** When the people using it are genuinely at risk, *"looks secure"* is dangerous. Group E2E and metadata anonymity are specialized cryptographic engineering — they don't yield to general-purpose hard work.
 - **There's no shame in halting for the right reason.** A documented MVP that admits its gaps is more useful than a shipped product that lies about them.
 
 ## On the code itself
@@ -101,7 +101,7 @@ If those preconditions are met — happy to discuss. Otherwise the repo stays as
 
 GPL-3.0 — see [LICENSE](LICENSE) for details.
 
-The copyleft choice is deliberate: this codebase is aimed at independent / opposition-aligned communication tooling, and viral copyleft prevents downstream proprietary forks from undermining the audience the project was originally built for.
+The copyleft choice is deliberate: in a messenger, users should be able to inspect what the code does with their conversations, and viral copyleft keeps every derivative open to the same inspection.
 
 ## Contact
 

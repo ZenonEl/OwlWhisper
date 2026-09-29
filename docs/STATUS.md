@@ -71,7 +71,7 @@ Three scenarios where it would make sense:
 
 1. **As a learning vehicle on modern messenger cryptography.** Refactor the handshake to Noise, add a ratchet, integrate MLS for groups, write tests, document the before/after. This would be a strong educational project and a much stronger portfolio piece than the current state.
 2. **As a P2P transport library.** Strip the messenger and ship `new-core/` as a standalone Go library for libp2p-based event-driven peer communication. Narrower scope, completable.
-3. **In partnership with a cryptographer**, if anyone wants to actually take on the group-E2E + traffic-anonymity problems at the level the original target audience would have required.
+3. **In partnership with a cryptographer**, if anyone wants to actually take on the group-E2E + traffic-anonymity problems at the level the original threat model required.
 
 If none of those happen — the repo stays as it is. A documented, halted MVP with the gaps named openly.
 
